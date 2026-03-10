@@ -18,7 +18,12 @@ export type IncidentStatus = "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
 
 export type IncidentCategory = "SECURITY" | "MAINTENANCE" | "NOISE" | "OTHER";
 
-export type ReservationStatus = "CONFIRMED" | "CANCELLED" | "COMPLETED";
+export type ReservationStatus =
+  | "PENDING_APPROVAL"
+  | "CONFIRMED"
+  | "REJECTED"
+  | "CANCELLED"
+  | "COMPLETED";
 
 export type PendingActionType =
   | "CREATE_VISITOR"
@@ -70,6 +75,26 @@ export interface ResidentAppSession {
   profile_type: ResidentAppProfileType;
   contexts: ResidentAppContext[];
   active_context: ResidentAppContext | null;
+  current_session?: ResidentDeviceSession | null;
+}
+
+export interface ResidentDeviceSession {
+  session_uuid: string;
+  profile_type: ResidentAppProfileType;
+  device_uuid?: string | null;
+  device_name?: string | null;
+  device_platform?: string | null;
+  user_agent?: string | null;
+  ip_address?: string | null;
+  active_context: ResidentAppContext | null;
+  created_at: string;
+  last_used_at: string;
+  expires_at: string;
+}
+
+export interface ResidentDeviceSessionList {
+  current_session_uuid?: string | null;
+  sessions: ResidentDeviceSession[];
 }
 
 export interface ResidentProfile {
@@ -92,6 +117,21 @@ export interface ResidentProfile {
   context_label?: string | null;
   avatar: string;
   tag: string;
+}
+
+export interface VisitorAccessEvent {
+  id: number;
+  event_at: string;
+  granted: boolean;
+  reason: string;
+  location?: {
+    id?: number | null;
+    name?: string | null;
+  } | null;
+  controller?: {
+    id?: number | null;
+    name?: string | null;
+  } | null;
 }
 
 export interface VisitorEntry {
@@ -120,6 +160,9 @@ export interface VisitorEntry {
   requires_host_approval?: boolean;
   invitation_status?: string;
   public_link?: string | null;
+  used_at?: string | null;
+  granted_access_event?: VisitorAccessEvent | null;
+  latest_access_event?: VisitorAccessEvent | null;
   current_registration?: {
     id: number;
     status: string;
@@ -186,27 +229,64 @@ export interface BulletinPost {
 
 export interface CommonArea {
   id: number;
+  site_id?: number | null;
   name: string;
   description?: string | null;
   capacity?: number | null;
   rules?: string | null;
+  opening_time: string;
+  closing_time: string;
+  requires_approval: boolean;
+  max_open_requests?: number | null;
+  location?: {
+    id: number;
+    name: string;
+    siteId: number;
+  } | null;
   status: "ACTIVE" | "MAINTENANCE" | "CLOSED";
 }
 
 export interface ReservationEntry {
   id: number;
+  event_name: string;
+  guest_count: number;
   reserved_from: string;
   reserved_until: string;
   notes?: string | null;
-  status: ReservationStatus;
+  status:
+    | "PENDING_APPROVAL"
+    | "CONFIRMED"
+    | "REJECTED"
+    | "CANCELLED"
+    | "COMPLETED";
   area: {
     id: number;
     name: string;
+    capacity?: number | null;
+    opening_time: string;
+    closing_time: string;
+    requires_approval: boolean;
+    max_open_requests?: number | null;
+    location?: {
+      id: number;
+      name: string;
+      siteId: number;
+    } | null;
   };
   person: {
     id: number;
     name: string;
+    residence_block?: string | null;
+    residence_apartment?: string | null;
   };
+  external_event?: {
+    id: number;
+    public_slug: string;
+    status: string;
+    registered_people: number;
+    max_people: number;
+  } | null;
+  public_link?: string | null;
   local_only?: boolean;
   pending_sync?: boolean;
 }
@@ -274,9 +354,15 @@ export interface CreateIncidentInput {
 
 export interface CreateReservationInput {
   area_id: number;
+  event_name: string;
+  guest_count: number;
   reserved_from: string;
   reserved_until: string;
   notes?: string;
+}
+
+export interface UpdateReservationHeadcountInput {
+  guest_count: number;
 }
 
 export interface SessionSnapshot {

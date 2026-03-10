@@ -30,13 +30,21 @@ import { PageHeader } from "@/features/shared/PageHeader";
 import { useSession } from "@/features/session/SessionProvider";
 import {
   approveVisitor,
+  cancelVisitor,
   createVisitor,
   getVisitorSettings,
   listVisitors,
   rejectVisitor,
   rotateVisitorLink,
 } from "@/services/mobile-app.service";
-import type { VisitorEntry } from "@/services/mobile-app.types";
+import type { VisitorAccessEvent, VisitorEntry } from "@/services/mobile-app.types";
+
+type VisitorListFilter =
+  | "ALL"
+  | "ONGOING"
+  | "PENDING_APPROVAL"
+  | "HISTORY"
+  | "CANCELLED";
 
 const statusConfig = {
   PENDING: { label: "Aguardando cadastro", variant: "warning" as const, icon: Clock3 },
@@ -55,6 +63,35 @@ function formatVisitDate(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatOperationalDate(value: string) {
+  return new Date(value).toLocaleString("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
+function formatAccessReason(reason?: string | null) {
+  switch (String(reason ?? "").trim().toUpperCase()) {
+    case "GRANTED":
+      return "Liberado";
+    case "NO_PERMISSION":
+      return "Sem permissão";
+    case "SCHEDULE":
+      return "Fora do horário";
+    case "EXPIRED_VISITOR":
+      return "Visitante expirado";
+    default:
+      return "Sem detalhe operacional";
+  }
+}
+
+function buildAccessContext(event?: VisitorAccessEvent | null) {
+  return [event?.location?.name, event?.controller?.name]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join(" • ");
 }
 
 function resolveAssetUrl(baseUrl: string, path?: string | null) {
@@ -90,6 +127,7 @@ const VisitorsPage = () => {
   const [guestName, setGuestName] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [visitorFilter, setVisitorFilter] = useState<VisitorListFilter>("ONGOING");
 
   const settingsQuery = useQuery({
     queryKey: ["visitor-settings", resident.id, snapshot.mode, connectionState],
@@ -168,6 +206,21 @@ const VisitorsPage = () => {
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Não foi possível rejeitar.");
+    },
+  });
+
+  const cancelVisitorMutation = useMutation({
+    mutationFn: async (visitorId: number) =>
+      cancelVisitor(snapshot, connectionState, resident, visitorId),
+    onSuccess: (updated) => {
+      if (updated) {
+        saveVisitorLocally(updated);
+      }
+      toast.success("Convite cancelado.");
+      queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Não foi possível cancelar.");
     },
   });
 
@@ -295,9 +348,29 @@ const VisitorsPage = () => {
     visitor.status === "PENDING_APPROVAL" ||
     visitor.status === "ACTIVE",
   );
+  const historyVisitors = visitors.filter((visitor) =>
+    visitor.status === "EXPIRED" ||
+    visitor.status === "REJECTED" ||
+    visitor.status === "CANCELLED" ||
+    visitor.status === "USED",
+  );
+  const cancelledVisitors = visitors.filter((visitor) => visitor.status === "CANCELLED");
   const pendingApprovals = visitors.filter(
     (visitor) => visitor.current_registration?.status === "PENDING_APPROVAL",
   );
+  const displayedVisitors = visitors.filter((visitor) => {
+    if (visitorFilter === "ALL") return true;
+    if (visitorFilter === "ONGOING") {
+      return ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(visitor.status);
+    }
+    if (visitorFilter === "PENDING_APPROVAL") {
+      return visitor.status === "PENDING_APPROVAL";
+    }
+    if (visitorFilter === "CANCELLED") {
+      return visitor.status === "CANCELLED";
+    }
+    return ["EXPIRED", "REJECTED", "CANCELLED", "USED"].includes(visitor.status);
+  });
 
   const effectiveEndDate = endDate || startDate;
   const selectedDuration = startDate && effectiveEndDate
@@ -441,6 +514,62 @@ const VisitorsPage = () => {
             {snapshot.mode === "preview" ? "Preview" : "Módulo ativo"}
           </Badge>
         </div>
+        <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div className="rounded-[18px] bg-muted px-3 py-2">
+            Em andamento: <strong>{activeVisitors.length}</strong>
+          </div>
+          <div className="rounded-[18px] bg-muted px-3 py-2">
+            Aguardando aprovação: <strong>{pendingApprovals.length}</strong>
+          </div>
+          <div className="rounded-[18px] bg-muted px-3 py-2">
+            Histórico: <strong>{historyVisitors.length}</strong>
+          </div>
+          <div className="rounded-[18px] bg-muted px-3 py-2">
+            Cancelados: <strong>{cancelledVisitors.length}</strong>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            variant={visitorFilter === "ONGOING" ? "accent" : "outline"}
+            className="rounded-full"
+            size="sm"
+            onClick={() => setVisitorFilter("ONGOING")}
+          >
+            Em andamento
+          </Button>
+          <Button
+            variant={visitorFilter === "PENDING_APPROVAL" ? "accent" : "outline"}
+            className="rounded-full"
+            size="sm"
+            onClick={() => setVisitorFilter("PENDING_APPROVAL")}
+          >
+            Pendentes
+          </Button>
+          <Button
+            variant={visitorFilter === "HISTORY" ? "accent" : "outline"}
+            className="rounded-full"
+            size="sm"
+            onClick={() => setVisitorFilter("HISTORY")}
+          >
+            Histórico
+          </Button>
+          <Button
+            variant={visitorFilter === "CANCELLED" ? "accent" : "outline"}
+            className="rounded-full"
+            size="sm"
+            onClick={() => setVisitorFilter("CANCELLED")}
+          >
+            Cancelados
+          </Button>
+          <Button
+            variant={visitorFilter === "ALL" ? "accent" : "outline"}
+            className="rounded-full"
+            size="sm"
+            onClick={() => setVisitorFilter("ALL")}
+          >
+            Todos
+          </Button>
+        </div>
       </div>
 
       {settings ? (
@@ -470,15 +599,31 @@ const VisitorsPage = () => {
       ) : null}
 
       <div className="space-y-3">
-        {visitors.map((visitor, index) => {
+        {displayedVisitors.map((visitor, index) => {
           const config = statusConfig[visitor.status];
           const photoUrl = resolveAssetUrl(
             snapshot.apiBaseUrl,
             visitor.current_registration?.person?.photo_url,
           );
+          const grantedAccessEvent =
+            visitor.granted_access_event ??
+            (visitor.latest_access_event?.granted
+              ? visitor.latest_access_event
+              : null);
+          const latestAccessEvent = visitor.latest_access_event ?? null;
+          const showLatestAttempt = Boolean(
+            latestAccessEvent &&
+              (!grantedAccessEvent || latestAccessEvent.id !== grantedAccessEvent.id),
+          );
+          const grantedAccessContext = buildAccessContext(grantedAccessEvent);
+          const latestAccessContext = buildAccessContext(latestAccessEvent);
           const canApprove =
             canCreateVisitors &&
             visitor.current_registration?.status === "PENDING_APPROVAL";
+          const canCancel =
+            canCreateVisitors &&
+            !visitor.pending_sync &&
+            ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(visitor.status);
 
           return (
             <motion.div
@@ -565,6 +710,44 @@ const VisitorsPage = () => {
                       </Button>
                     </div>
                   ) : null}
+
+                  {visitor.status === "CANCELLED" ? (
+                    <div className="mt-4 rounded-[18px] border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                      Este convite foi cancelado e o acesso temporário associado deixou de ser válido.
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {grantedAccessEvent ? (
+                <div className="mt-4 rounded-[20px] border border-success/25 bg-success/10 px-4 py-3">
+                  <p className="text-sm font-semibold text-success">
+                    Acesso utilizado em {formatOperationalDate(visitor.used_at ?? grantedAccessEvent.event_at)}
+                  </p>
+                  <p className="mt-1 text-sm text-success/90">
+                    {grantedAccessContext
+                      ? `Passagem registrada em ${grantedAccessContext}.`
+                      : "A passagem deste convite já foi registrada pela operação."}
+                  </p>
+                </div>
+              ) : null}
+
+              {showLatestAttempt && latestAccessEvent ? (
+                <div
+                  className={`mt-3 rounded-[20px] border px-4 py-3 text-sm ${
+                    latestAccessEvent.granted
+                      ? "border-info/25 bg-info/10 text-info"
+                      : "border-warning/25 bg-warning/10 text-warning"
+                  }`}
+                >
+                  <p className="font-semibold">
+                    Última tentativa {latestAccessEvent.granted ? "liberada" : "negada"} em{" "}
+                    {formatOperationalDate(latestAccessEvent.event_at)}
+                  </p>
+                  <p className="mt-1">
+                    {formatAccessReason(latestAccessEvent.reason)}
+                    {latestAccessContext ? ` • ${latestAccessContext}` : ""}
+                  </p>
                 </div>
               ) : null}
 
@@ -584,7 +767,7 @@ const VisitorsPage = () => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-full"
-                    disabled={rotateLinkMutation.isPending || !canCreateVisitors}
+                    disabled={rotateLinkMutation.isPending || !canCreateVisitors || visitor.status === "CANCELLED"}
                     onClick={() => handleShare(visitor)}
                   >
                     <Share2 className="h-3.5 w-3.5" />
@@ -593,7 +776,7 @@ const VisitorsPage = () => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-full"
-                    disabled={rotateLinkMutation.isPending || !canCreateVisitors}
+                    disabled={rotateLinkMutation.isPending || !canCreateVisitors || visitor.status === "CANCELLED"}
                     onClick={() => handleCopy(visitor)}
                   >
                     <Copy className="h-3.5 w-3.5" />
@@ -602,7 +785,7 @@ const VisitorsPage = () => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-full"
-                    disabled={rotateLinkMutation.isPending || !canCreateVisitors}
+                    disabled={rotateLinkMutation.isPending || !canCreateVisitors || visitor.status === "CANCELLED"}
                     onClick={() => rotateLinkMutation.mutate(visitor.id)}
                   >
                     {rotateLinkMutation.isPending ? (
@@ -613,13 +796,27 @@ const VisitorsPage = () => {
                   </Button>
                 </div>
               </div>
+
+              {canCancel ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    variant="outline"
+                    className="rounded-full"
+                    disabled={cancelVisitorMutation.isPending}
+                    onClick={() => cancelVisitorMutation.mutate(visitor.id)}
+                  >
+                    <XCircle className="h-4 w-4" />
+                    Cancelar convite
+                  </Button>
+                </div>
+              ) : null}
             </motion.div>
           );
         })}
 
-        {visitors.length === 0 ? (
+        {displayedVisitors.length === 0 ? (
           <div className="rounded-[24px] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
-            Nenhum convite cadastrado para este contexto.
+            Nenhum convite encontrado para o filtro atual.
           </div>
         ) : null}
       </div>

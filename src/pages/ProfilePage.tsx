@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,22 +38,51 @@ const ProfilePage = () => {
     resident,
     residents,
     snapshot,
+    deviceSessions,
+    isLoadingDeviceSessions,
     isAuthenticated,
     isHydratingSession,
+    isConnecting,
     setApiBaseUrl,
     switchMode,
     switchResident,
+    changePassword,
     disconnectBackend,
     refreshResidents,
     refreshSession,
+    refreshDeviceSessions,
+    revokeDeviceSession,
     syncPending,
   } = useSession();
 
   const [apiBaseUrl, setApiBaseUrlInput] = useState(snapshot.apiBaseUrl);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [nextPassword, setNextPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const contextLabel =
     resident.role === "SINDICO"
       ? "Site / contexto ativo"
       : "Unidade / contexto ativo";
+  const passwordLabel =
+    resident.role === "SINDICO" ? "Senha do síndico / Management" : "Senha do app";
+  const currentSessionUuid = snapshot.residentAuth?.current_session?.session_uuid ?? null;
+
+  function formatSessionStamp(value?: string | null) {
+    if (!value) return "Sem registro";
+    return new Intl.DateTimeFormat("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(value));
+  }
+
+  function describeSessionDevice(session: (typeof deviceSessions)[number]) {
+    return (
+      session.device_name ||
+      session.device_platform ||
+      session.user_agent ||
+      "Dispositivo identificado"
+    );
+  }
 
   function applyApiBaseUrl() {
     const nextApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
@@ -69,6 +99,18 @@ const ProfilePage = () => {
     await refreshSession();
     await refreshResidents();
     queryClient.invalidateQueries();
+  }
+
+  async function handleChangePassword() {
+    if (nextPassword !== confirmPassword) {
+      toast.error("A confirmação da nova senha precisa ser igual à senha.");
+      return;
+    }
+
+    await changePassword(currentPassword, nextPassword);
+    setCurrentPassword("");
+    setNextPassword("");
+    setConfirmPassword("");
   }
 
   return (
@@ -141,6 +183,172 @@ const ProfilePage = () => {
           </Button>
         </div>
       </div>
+
+      {snapshot.mode === "backend" && isAuthenticated ? (
+        <div className="rounded-[28px] border border-border bg-card p-5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <KeyRound className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                Credenciais
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {resident.role === "SINDICO"
+                  ? "Atualiza a mesma senha usada no painel Management para este CPF."
+                  : "Atualiza a senha própria do app vinculada ao seu CPF."}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <div className="space-y-2">
+              <Label>Senha atual</Label>
+              <Input
+                type="password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                placeholder={passwordLabel}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Nova senha</Label>
+              <Input
+                type="password"
+                value={nextPassword}
+                onChange={(event) => setNextPassword(event.target.value)}
+                placeholder="Defina a nova senha"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Confirmar nova senha</Label>
+              <Input
+                type="password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                placeholder="Repita a nova senha"
+              />
+            </div>
+            <Button
+              variant="accent"
+              className="rounded-full"
+              disabled={
+                !currentPassword.trim() ||
+                !nextPassword.trim() ||
+                !confirmPassword.trim() ||
+                isConnecting
+              }
+              onClick={() => void handleChangePassword()}
+            >
+              <KeyRound className="h-4 w-4" />
+              {isConnecting ? "Atualizando senha..." : "Atualizar senha"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {snapshot.mode === "backend" && isAuthenticated ? (
+        <div className="rounded-[28px] border border-border bg-card p-5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <Smartphone className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                Sessões ativas
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Lista os dispositivos com acesso ativo ao app para este CPF.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              {deviceSessions.length} sessão(ões) carregada(s).
+            </p>
+            <Button
+              variant="outline"
+              className="rounded-full"
+              disabled={isLoadingDeviceSessions}
+              onClick={() => void refreshDeviceSessions()}
+            >
+              <RefreshCw className="h-4 w-4" />
+              {isLoadingDeviceSessions ? "Atualizando..." : "Atualizar sessões"}
+            </Button>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {deviceSessions.length === 0 ? (
+              <div className="rounded-[22px] border border-dashed border-border/70 bg-muted/30 p-4 text-sm text-muted-foreground">
+                Nenhuma sessão ativa retornada pela API para este perfil.
+              </div>
+            ) : (
+              deviceSessions.map((session) => {
+                const isCurrent = session.session_uuid === currentSessionUuid;
+
+                return (
+                  <div
+                    key={session.session_uuid}
+                    className="rounded-[22px] border border-border/70 bg-muted/35 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground">
+                            {describeSessionDevice(session)}
+                          </p>
+                          <Badge variant={isCurrent ? "success" : "outline"}>
+                            {isCurrent ? "Este dispositivo" : "Sessão remota"}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {session.active_context?.context_label ??
+                            "Contexto ativo sem identificação detalhada"}
+                        </p>
+                      </div>
+
+                      {!isCurrent ? (
+                        <Button
+                          variant="outline"
+                          className="rounded-full"
+                          disabled={isLoadingDeviceSessions}
+                          onClick={() => void revokeDeviceSession(session.session_uuid)}
+                        >
+                          <LogOut className="h-4 w-4" />
+                          Revogar
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                      <div>
+                        <p className="uppercase tracking-[0.18em]">Último uso</p>
+                        <p className="mt-1 text-sm text-foreground">
+                          {formatSessionStamp(session.last_used_at)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="uppercase tracking-[0.18em]">Expira em</p>
+                        <p className="mt-1 text-sm text-foreground">
+                          {formatSessionStamp(session.expires_at)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="uppercase tracking-[0.18em]">Criada em</p>
+                        <p className="mt-1 text-sm text-foreground">
+                          {formatSessionStamp(session.created_at)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <div className="rounded-[28px] border border-border bg-card p-5 shadow-sm">
         <div className="flex items-center gap-3">

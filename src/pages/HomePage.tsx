@@ -12,10 +12,15 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  countUnreadResidentNotifications,
+  deriveResidentNotifications,
+} from "@/features/notifications/resident-notifications";
 import { ResidenceContextToggle } from "@/features/session/ActiveResidenceSwitcher";
 import { ConnectivityPill } from "@/features/shared/ConnectivityPill";
 import { useSession } from "@/features/session/SessionProvider";
@@ -77,16 +82,33 @@ const HomePage = () => {
 
   const deliveries = listDeliveries();
   const visitorCount = visitorsQuery.data?.filter((item) => item.status === "PENDING" || item.status === "ACTIVE").length ?? 0;
-  const reservationCount = reservationsQuery.data?.filter((item) => item.status === "CONFIRMED").length ?? 0;
+  const reservationCount =
+    reservationsQuery.data?.filter(
+      (item) => item.person.id === resident.id && item.status === "CONFIRMED",
+    ).length ?? 0;
   const waitingDeliveries = deliveries.filter((item) => item.status === "waiting").length;
   const openIncidents = incidentsQuery.data?.filter((item) => item.status === "OPEN" || item.status === "IN_PROGRESS").length ?? 0;
   const pinnedNotice = bulletinQuery.data?.find((item) => item.pinned) ?? bulletinQuery.data?.[0];
+  const residentNotifications = useMemo(
+    () => deriveResidentNotifications(resident, visitorsQuery.data ?? []),
+    [resident, visitorsQuery.data],
+  );
+  const unreadNotificationCount = useMemo(
+    () => countUnreadResidentNotifications(resident, residentNotifications),
+    [resident, residentNotifications],
+  );
+  const pendingApprovalCount = residentNotifications.filter(
+    (notification) => notification.kind === "VISITOR_PENDING_APPROVAL",
+  ).length;
+  const monitoringCount = residentNotifications.filter(
+    (notification) => notification.kind !== "VISITOR_PENDING_APPROVAL",
+  ).length;
 
   const recentActivity = [
     ...(visitorsQuery.data ?? []).slice(0, 2).map((visitor) => ({
       id: `visitor-${visitor.id}`,
       title: `${visitor.guest_name} com acesso ${visitor.status === "USED" ? "utilizado" : "agendado"}`,
-      when: formatWhen(visitor.visit_date),
+      when: formatWhen(visitor.status === "USED" ? visitor.used_at ?? visitor.visit_date : visitor.visit_date),
       badge: "Visitante",
       variant: "info" as const,
     })),
@@ -116,10 +138,15 @@ const HomePage = () => {
             <Button
               variant="ghost"
               size="icon"
-              className="rounded-2xl border border-primary-foreground/15 bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/15"
-              onClick={() => navigate("/profile")}
+              className="relative rounded-2xl border border-primary-foreground/15 bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/15"
+              onClick={() => navigate("/notifications")}
             >
               <Bell className="h-5 w-5" />
+              {unreadNotificationCount > 0 ? (
+                <span className="absolute right-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-bold text-warning-foreground">
+                  {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
+                </span>
+              ) : null}
             </Button>
           </div>
 
@@ -139,6 +166,38 @@ const HomePage = () => {
           </div>
         </div>
       </motion.div>
+
+      {pendingApprovalCount > 0 || unreadNotificationCount > 0 ? (
+        <motion.button
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.03 }}
+          onClick={() => navigate("/notifications")}
+          className="w-full rounded-[24px] border border-warning/20 bg-warning/10 p-4 text-left shadow-sm"
+        >
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-11 w-11 items-center justify-center rounded-2xl bg-warning text-warning-foreground">
+              <Bell className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+                Notificações do app
+              </p>
+              <p className="mt-1 text-base font-semibold text-foreground">
+                {pendingApprovalCount > 0
+                  ? `${pendingApprovalCount} cadastro(s) aguardando sua aprovação`
+                  : `${unreadNotificationCount} atualização(ões) novas na sua caixa operacional`}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {monitoringCount > 0
+                  ? `${monitoringCount} retorno(s) operacional(is) de convites já estão disponíveis para acompanhamento.`
+                  : "Abra a caixa operacional para revisar os convites do contexto ativo."}
+              </p>
+            </div>
+            <ChevronRight className="mt-1 h-4 w-4 text-muted-foreground" />
+          </div>
+        </motion.button>
+      ) : null}
 
       <motion.div
         initial={{ opacity: 0, y: 8 }}

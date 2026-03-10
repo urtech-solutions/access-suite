@@ -19,6 +19,7 @@ const DeliveriesPage = lazy(() => import("@/pages/DeliveriesPage"));
 const HomePage = lazy(() => import("@/pages/HomePage"));
 const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
 const NotFound = lazy(() => import("@/pages/NotFound"));
+const NotificationsPage = lazy(() => import("@/pages/NotificationsPage"));
 const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
 const VisitorsPage = lazy(() => import("@/pages/VisitorsPage"));
 
@@ -71,6 +72,7 @@ const App = () => (
             <Route path="/incidents" element={<IncidentsPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/bulletin" element={<BulletinPage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>
           <Route path="*" element={<NotFound />} />

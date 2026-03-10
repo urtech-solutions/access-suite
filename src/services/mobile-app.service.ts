@@ -1,5 +1,6 @@
 import { createPreviewState, demoResidents } from "@/data/demo-data";
 import { DEFAULT_API_BASE_URL, DEFAULT_APP_MODE } from "@/config/env";
+import { getResidentDeviceInfo } from "@/services/device-info";
 import { readStorage, removeStorage, writeStorage } from "@/services/storage";
 import type {
   BulletinPost,
@@ -15,10 +16,13 @@ import type {
   ResidentAppCredentials,
   ResidentAppLookupResult,
   ResidentAppProfileType,
+  ResidentDeviceSession,
+  ResidentDeviceSessionList,
   ResidentAppSession,
   ResidentProfile,
   ReservationEntry,
   SessionSnapshot,
+  UpdateReservationHeadcountInput,
   VisitorEntry,
   VisitorModuleSettings,
 } from "@/services/mobile-app.types";
@@ -39,6 +43,7 @@ type ResidentAppAuthResponse = {
   contexts: ResidentAppContext[];
   active_context: ResidentAppContext | null;
   requires_context_selection: boolean;
+  current_session?: ResidentDeviceSession | null;
 };
 
 type ResidentAppMeResponse = {
@@ -48,6 +53,19 @@ type ResidentAppMeResponse = {
   contexts: ResidentAppContext[];
   active_context: ResidentAppContext | null;
   requires_context_selection: boolean;
+  current_session?: ResidentDeviceSession | null;
+};
+
+type ResidentAppForgetResponse = {
+  success: boolean;
+  message: string;
+  reset_token?: string | null;
+  expires_in?: string | null;
+  profile_type?: ResidentAppProfileType;
+};
+
+type ResidentAppResetResponse = {
+  success: boolean;
 };
 
 export function normalizeApiBaseUrl(baseUrl?: string) {
@@ -99,6 +117,10 @@ function cacheKey(name: string) {
 
 function visitorLinkCacheKey(visitorId: number) {
   return cacheKey(`visitor-link:${visitorId}`);
+}
+
+function reservationLinkCacheKey(reservationId: number) {
+  return cacheKey(`reservation-link:${reservationId}`);
 }
 
 function generateId() {
@@ -185,6 +207,21 @@ function attachVisitorLinks(visitors: VisitorEntry[]) {
   return visitors.map((visitor) => ({
     ...visitor,
     public_link: visitor.public_link ?? readVisitorLink(visitor.id),
+  }));
+}
+
+function readReservationLink(reservationId: number) {
+  return readStorage<string | null>(reservationLinkCacheKey(reservationId), null);
+}
+
+function writeReservationLink(reservationId: number, publicLink: string) {
+  writeStorage(reservationLinkCacheKey(reservationId), publicLink);
+}
+
+function attachReservationLinks(reservations: ReservationEntry[]) {
+  return reservations.map((reservation) => ({
+    ...reservation,
+    public_link: reservation.public_link ?? readReservationLink(reservation.id),
   }));
 }
 
@@ -299,7 +336,12 @@ export function mapResidentContextToProfile(
 function buildResidentSession(
   response: Pick<
     ResidentAppAuthResponse,
-    "account_uuid" | "cpf_digits" | "contexts" | "active_context"
+    | "account_uuid"
+    | "cpf_digits"
+    | "contexts"
+    | "active_context"
+    | "current_session"
+    | "profile_type"
   >,
 ): ResidentAppSession {
   return {
@@ -308,6 +350,7 @@ function buildResidentSession(
     profile_type: response.profile_type,
     contexts: response.contexts,
     active_context: response.active_context,
+    current_session: response.current_session ?? null,
   };
 }
 
@@ -452,6 +495,21 @@ function isOnlineBackend(
   );
 }
 
+function canAttemptBackendRequest(snapshot: SessionSnapshot) {
+  return (
+    snapshot.mode === "backend" &&
+    Boolean(snapshot.token) &&
+    Boolean(snapshot.residentAuth?.account_uuid)
+  );
+}
+
+function isApiConnectionError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.startsWith("Não foi possível conectar à API em ")
+  );
+}
+
 export function isBackendAuthenticated(snapshot: SessionSnapshot) {
   return (
     snapshot.mode === "backend" &&
@@ -480,6 +538,7 @@ export async function registerResidentAppSession(
   credentials: ResidentAppCredentials,
   baseUrl?: string,
 ) {
+  const deviceInfo = getResidentDeviceInfo();
   const response = await requestJson<ResidentAppAuthResponse>(
     "/resident-app-auth/register",
     {
@@ -489,6 +548,7 @@ export async function registerResidentAppSession(
         cpf: normalizeCpfDigits(credentials.cpf),
         password: credentials.password,
         profile_type: credentials.profile_type,
+        ...deviceInfo,
       },
     },
   );
@@ -500,6 +560,7 @@ export async function connectBackendSession(
   credentials: ResidentAppCredentials,
   baseUrl?: string,
 ) {
+  const deviceInfo = getResidentDeviceInfo();
   const response = await requestJson<ResidentAppAuthResponse>(
     "/resident-app-auth/login",
     {
@@ -509,11 +570,48 @@ export async function connectBackendSession(
         cpf: normalizeCpfDigits(credentials.cpf),
         password: credentials.password,
         profile_type: credentials.profile_type,
+        ...deviceInfo,
       },
     },
   );
 
   return createBackendSnapshot(response, baseUrl);
+}
+
+export async function requestResidentAppPasswordReset(
+  cpf: string,
+  profileType: ResidentAppProfileType,
+  baseUrl?: string,
+) {
+  return requestJson<ResidentAppForgetResponse>(
+    "/resident-app-auth/forget",
+    {
+      baseUrl,
+      method: "POST",
+      body: {
+        cpf: normalizeCpfDigits(cpf),
+        profile_type: profileType,
+      },
+    },
+  );
+}
+
+export async function resetResidentAppPassword(
+  password: string,
+  token: string,
+  baseUrl?: string,
+) {
+  return requestJson<ResidentAppResetResponse>(
+    "/resident-app-auth/reset",
+    {
+      baseUrl,
+      method: "POST",
+      body: {
+        password,
+        token,
+      },
+    },
+  );
 }
 
 export async function hydrateBackendSession(snapshot: SessionSnapshot) {
@@ -542,7 +640,10 @@ export async function hydrateBackendSession(snapshot: SessionSnapshot) {
       {
         baseUrl: snapshot.apiBaseUrl,
         method: "POST",
-        body: { refresh_token: snapshot.refreshToken },
+        body: {
+          refresh_token: snapshot.refreshToken,
+          ...getResidentDeviceInfo(),
+        },
       },
     );
 
@@ -568,6 +669,62 @@ export async function switchResidentBackendContext(
   );
 
   return createBackendSnapshot(response, snapshot.apiBaseUrl);
+}
+
+export async function changeResidentAppPassword(
+  snapshot: SessionSnapshot,
+  currentPassword: string,
+  password: string,
+) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão backend não autenticada.");
+  }
+
+  const response = await requestJson<ResidentAppAuthResponse>(
+    "/resident-app-auth/change-password",
+    {
+      baseUrl: snapshot.apiBaseUrl,
+      token: snapshot.token,
+      method: "POST",
+      body: {
+        current_password: currentPassword,
+        password,
+        ...getResidentDeviceInfo(),
+      },
+    },
+  );
+
+  return createBackendSnapshot(response, snapshot.apiBaseUrl);
+}
+
+export async function listResidentAppSessions(snapshot: SessionSnapshot) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão backend não autenticada.");
+  }
+
+  return requestJson<ResidentDeviceSessionList>("/resident-app-auth/sessions", {
+    baseUrl: snapshot.apiBaseUrl,
+    token: snapshot.token,
+    method: "POST",
+  });
+}
+
+export async function revokeResidentAppSession(
+  snapshot: SessionSnapshot,
+  sessionUuid: string,
+) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão backend não autenticada.");
+  }
+
+  return requestJson<{ success: boolean }>(
+    `/resident-app-auth/sessions/${sessionUuid}/revoke`,
+    {
+      baseUrl: snapshot.apiBaseUrl,
+      token: snapshot.token,
+      method: "POST",
+    },
+  );
 }
 
 export async function loadBackendResidents(snapshot: SessionSnapshot) {
@@ -650,7 +807,7 @@ export async function createVisitor(
 ) {
   ensureResidentWriteAccess(resident, "A criação de convites");
 
-  if (isOnlineBackend(snapshot, connectionState)) {
+  if (canAttemptBackendRequest(snapshot)) {
     try {
       const created = await requestJson<VisitorEntry>(
         "/resident-app/visitors",
@@ -676,8 +833,13 @@ export async function createVisitor(
       ];
       writeCache(`visitors:${resident.id}`, next);
       return hydrated;
-    } catch {
-      // Offline/pending fallback below.
+    } catch (error) {
+      if (
+        snapshot.mode === "backend" &&
+        (connectionState === "online" || !isApiConnectionError(error))
+      ) {
+        throw error;
+      }
     }
   }
 
@@ -808,6 +970,59 @@ export async function rejectVisitor(
   );
 }
 
+export async function cancelVisitor(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  resident: ResidentProfile,
+  visitorId: number,
+) {
+  ensureResidentWriteAccess(resident, "O cancelamento de convites");
+
+  if (snapshot.mode === "preview") {
+    const next = upsertPreviewState("visitors", (visitors) =>
+      visitors.map((visitor) =>
+        visitor.id === visitorId
+          ? {
+              ...visitor,
+              status: "CANCELLED",
+              invitation_status: "CANCELLED",
+              pending_sync: false,
+            }
+          : visitor,
+      ),
+    );
+
+    const currentResidentVisitors = next.filter(
+      (visitor) => visitor.host?.id === resident.id,
+    );
+    writeCache(`visitors:${resident.id}`, currentResidentVisitors);
+    return currentResidentVisitors.find((visitor) => visitor.id === visitorId) ?? null;
+  }
+
+  if (!isOnlineBackend(snapshot, connectionState)) {
+    throw new Error("O cancelamento do convite exige conexão com o backend.");
+  }
+
+  const updated = await requestJson<VisitorEntry>(
+    `/resident-app/visitors/${visitorId}/cancel`,
+    {
+      baseUrl: snapshot.apiBaseUrl,
+      token: snapshot.token,
+      method: "POST",
+    },
+  );
+
+  const hydrated = {
+    ...updated,
+    public_link: updated.public_link ?? readVisitorLink(updated.id),
+  };
+  const next = readCache<VisitorEntry[]>(`visitors:${resident.id}`, []).map((visitor) =>
+    visitor.id === hydrated.id ? hydrated : visitor,
+  );
+  writeCache(`visitors:${resident.id}`, next);
+  return hydrated;
+}
+
 export async function listIncidents(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
@@ -850,7 +1065,7 @@ export async function createIncident(
 ) {
   ensureResidentWriteAccess(resident, "A abertura de incidentes");
 
-  if (isOnlineBackend(snapshot, connectionState)) {
+  if (canAttemptBackendRequest(snapshot)) {
     try {
       const created = await requestJson<IncidentEntry>(
         "/resident-app/incidents",
@@ -869,8 +1084,13 @@ export async function createIncident(
       ];
       writeCache(`incidents:${resident.id}`, next);
       return created;
-    } catch {
-      // Offline/pending fallback below.
+    } catch (error) {
+      if (
+        snapshot.mode === "backend" &&
+        (connectionState === "online" || !isApiConnectionError(error))
+      ) {
+        throw error;
+      }
     }
   }
 
@@ -970,8 +1190,8 @@ export async function listReservations(
   connectionState: ConnectionState,
   resident: ResidentProfile,
 ) {
-  const previewReservations = readPreviewState().reservations.filter(
-    (reservation) => reservation.person.id === resident.id,
+  const previewReservations = attachReservationLinks(
+    readPreviewState().reservations,
   );
 
   if (!isOnlineBackend(snapshot, connectionState)) {
@@ -982,13 +1202,20 @@ export async function listReservations(
   }
 
   try {
-    const reservations = await requestJson<ReservationEntry[]>(
+    const reservations = attachReservationLinks(
+      await requestJson<ReservationEntry[]>(
       "/resident-app/reservations",
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
       },
+      ),
     );
+    reservations.forEach((reservation) => {
+      if (reservation.public_link) {
+        writeReservationLink(reservation.id, reservation.public_link);
+      }
+    });
     writeCache(`reservations:${resident.id}`, reservations);
     return reservations;
   } catch {
@@ -1008,9 +1235,10 @@ export async function createReservation(
 ) {
   ensureResidentWriteAccess(resident, "A criação de reservas");
 
-  if (isOnlineBackend(snapshot, connectionState)) {
+  if (canAttemptBackendRequest(snapshot)) {
     try {
-      const created = await requestJson<ReservationEntry>(
+      const created = attachReservationLinks([
+        await requestJson<ReservationEntry>(
         "/resident-app/reservations",
         {
           baseUrl: snapshot.apiBaseUrl,
@@ -1020,43 +1248,74 @@ export async function createReservation(
             ...input,
           },
         },
-      );
+      ),
+      ])[0];
+      if (created.public_link) {
+        writeReservationLink(created.id, created.public_link);
+      }
       const next = [
         created,
         ...readCache<ReservationEntry[]>(`reservations:${resident.id}`, []),
       ];
       writeCache(`reservations:${resident.id}`, next);
       return created;
-    } catch {
-      // Offline/pending fallback below.
+    } catch (error) {
+      if (
+        snapshot.mode === "backend" &&
+        (connectionState === "online" || !isApiConnectionError(error))
+      ) {
+        throw error;
+      }
     }
   }
 
   const area = areas.find((item) => item.id === input.area_id) ?? {
     id: input.area_id,
     name: "Área comum",
-  };
+    opening_time: "08:00",
+    closing_time: "22:00",
+    requires_approval: false,
+    };
+
+  const localStatus = area.requires_approval ? "PENDING_APPROVAL" : "CONFIRMED";
+  const localReservationId = generateId();
 
   const localReservation: ReservationEntry = {
-    id: generateId(),
+    id: localReservationId,
+    event_name: input.event_name,
+    guest_count: input.guest_count,
     reserved_from: input.reserved_from,
     reserved_until: input.reserved_until,
     notes: input.notes ?? null,
-    status: "CONFIRMED",
-    area: { id: area.id, name: area.name },
+    status: localStatus,
+    area: {
+      id: area.id,
+      name: area.name,
+      capacity: area.capacity ?? null,
+      opening_time: area.opening_time,
+      closing_time: area.closing_time,
+      requires_approval: area.requires_approval,
+      max_open_requests: area.max_open_requests ?? null,
+      location: area.location ?? null,
+    },
     person: { id: resident.id, name: resident.name },
+    public_link:
+      localStatus === "CONFIRMED"
+        ? `https://preview.securityvision.local/public/external-events/reservation-${localReservationId}?t=demo`
+        : null,
     local_only: snapshot.mode === "preview",
     pending_sync: snapshot.mode === "backend",
   };
+
+  if (localReservation.public_link) {
+    writeReservationLink(localReservation.id, localReservation.public_link);
+  }
 
   const next = upsertPreviewState("reservations", (reservations) => [
     localReservation,
     ...reservations,
   ]);
-  writeCache(
-    `reservations:${resident.id}`,
-    next.filter((reservation) => reservation.person.id === resident.id),
-  );
+  writeCache(`reservations:${resident.id}`, next);
 
   if (snapshot.mode === "backend") {
     appendPendingAction({
@@ -1071,6 +1330,103 @@ export async function createReservation(
   }
 
   return localReservation;
+}
+
+export async function rotateReservationLink(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  resident: ResidentProfile,
+  reservationId: number,
+) {
+  ensureResidentWriteAccess(resident, "A rotação do link da reserva");
+
+  if (isOnlineBackend(snapshot, connectionState)) {
+    const rotated = attachReservationLinks([
+      await requestJson<ReservationEntry>(
+        `/resident-app/reservations/${reservationId}/rotate-link`,
+        {
+          baseUrl: snapshot.apiBaseUrl,
+          token: snapshot.token,
+          method: "POST",
+        },
+      ),
+    ])[0];
+
+    if (rotated.public_link) {
+      writeReservationLink(rotated.id, rotated.public_link);
+    }
+
+    const next = readCache<ReservationEntry[]>(`reservations:${resident.id}`, []).map(
+      (reservation) =>
+        reservation.id === rotated.id ? { ...reservation, ...rotated } : reservation,
+    );
+    writeCache(`reservations:${resident.id}`, next);
+    return rotated;
+  }
+
+  const fallbackLink = `https://preview.securityvision.local/public/external-events/reservation-${reservationId}?t=${generateId()}`;
+  writeReservationLink(reservationId, fallbackLink);
+  const next = upsertPreviewState("reservations", (reservations) =>
+    reservations.map((reservation) =>
+      reservation.id === reservationId
+        ? { ...reservation, public_link: fallbackLink }
+        : reservation,
+    ),
+  );
+  writeCache(`reservations:${resident.id}`, next);
+  return next.find((reservation) => reservation.id === reservationId) as
+    | ReservationEntry
+    | undefined;
+}
+
+export async function updateReservationHeadcount(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  resident: ResidentProfile,
+  reservationId: number,
+  input: UpdateReservationHeadcountInput,
+) {
+  ensureResidentWriteAccess(resident, "A atualização da lotação da reserva");
+
+  if (isOnlineBackend(snapshot, connectionState)) {
+    const updated = attachReservationLinks([
+      await requestJson<ReservationEntry>(
+        `/resident-app/reservations/${reservationId}/headcount`,
+        {
+          baseUrl: snapshot.apiBaseUrl,
+          token: snapshot.token,
+          method: "PATCH",
+          body: input,
+        },
+      ),
+    ])[0];
+
+    if (updated.public_link) {
+      writeReservationLink(updated.id, updated.public_link);
+    }
+
+    const next = readCache<ReservationEntry[]>(`reservations:${resident.id}`, []).map(
+      (reservation) =>
+        reservation.id === updated.id ? { ...reservation, ...updated } : reservation,
+    );
+    writeCache(`reservations:${resident.id}`, next);
+    return updated;
+  }
+
+  const now = new Date();
+  const next = upsertPreviewState("reservations", (reservations) =>
+    reservations.map((reservation) =>
+      reservation.id === reservationId &&
+      new Date(reservation.reserved_from) <= now &&
+      new Date(reservation.reserved_until) >= now
+        ? { ...reservation, guest_count: input.guest_count }
+        : reservation,
+    ),
+  );
+  writeCache(`reservations:${resident.id}`, next);
+  return next.find((reservation) => reservation.id === reservationId) as
+    | ReservationEntry
+    | undefined;
 }
 
 export function listDeliveries() {

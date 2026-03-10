@@ -35,7 +35,11 @@ import {
   formatLookupContextTitle,
   resolveResidentContextKey,
 } from "@/features/session/resident-context";
-import { normalizeApiBaseUrl } from "@/services/mobile-app.service";
+import {
+  normalizeApiBaseUrl,
+  requestResidentAppPasswordReset,
+  resetResidentAppPassword,
+} from "@/services/mobile-app.service";
 import type {
   ResidentAppLookupProfile,
   ResidentAppProfileType,
@@ -51,7 +55,13 @@ function maskCpf(value: string) {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
 }
 
-type AuthStage = "lookup" | "profile" | "login" | "register" | "context";
+type AuthStage =
+  | "lookup"
+  | "profile"
+  | "login"
+  | "register"
+  | "reset"
+  | "context";
 
 function resolveErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -144,6 +154,8 @@ const AuthPage = () => {
   const [cpf, setCpf] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordResetToken, setPasswordResetToken] = useState<string | null>(null);
+  const [isRecovering, setIsRecovering] = useState(false);
   const [lookupMessage, setLookupMessage] = useState("");
   const [lookupProfiles, setLookupProfiles] = useState<ResidentAppLookupProfile[]>([]);
   const [selectedProfileType, setSelectedProfileType] =
@@ -172,6 +184,7 @@ const AuthPage = () => {
     setStage("lookup");
     setPassword("");
     setConfirmPassword("");
+    setPasswordResetToken(null);
     setLookupProfiles([]);
     setSelectedProfileType(null);
     setSelectedContextId("");
@@ -365,6 +378,88 @@ const AuthPage = () => {
     }
   }
 
+  async function handleForgotPassword() {
+    if (!selectedProfileType) {
+      setLookupMessage("Escolha primeiro o perfil que deseja recuperar.");
+      setStage("profile");
+      return;
+    }
+
+    const nextApiBaseUrl = applyApiBaseUrl();
+    setLookupMessage("");
+    setIsRecovering(true);
+
+    try {
+      const result = await requestResidentAppPasswordReset(
+        cpf,
+        selectedProfileType,
+        nextApiBaseUrl,
+      );
+
+      if (!result.reset_token) {
+        setLookupMessage(result.message);
+        return;
+      }
+
+      setPassword("");
+      setConfirmPassword("");
+      setPasswordResetToken(result.reset_token);
+      setStage("reset");
+      setLookupMessage(
+        selectedProfileType === "SYNDIC"
+          ? "Token de redefinição emitido. Defina a nova senha que também valerá para o portal Management."
+          : "Token de redefinição emitido. Defina a nova senha do app para este CPF.",
+      );
+    } catch (error) {
+      setLookupMessage(
+        resolveErrorMessage(
+          error,
+          "Não foi possível iniciar a recuperação de senha.",
+        ),
+      );
+    } finally {
+      setIsRecovering(false);
+    }
+  }
+
+  async function handleResetPassword() {
+    if (password !== confirmPassword) {
+      setLookupMessage("A confirmação de senha precisa ser igual à senha.");
+      return;
+    }
+
+    if (!passwordResetToken) {
+      setLookupMessage("O token de redefinição não está disponível nesta sessão.");
+      return;
+    }
+
+    const nextApiBaseUrl = applyApiBaseUrl();
+    setLookupMessage("");
+    setIsRecovering(true);
+
+    try {
+      await resetResidentAppPassword(password, passwordResetToken, nextApiBaseUrl);
+      setPassword("");
+      setConfirmPassword("");
+      setPasswordResetToken(null);
+      setStage("login");
+      setLookupMessage(
+        selectedProfileType === "SYNDIC"
+          ? "Senha redefinida. Entre novamente com a nova senha do Management."
+          : "Senha redefinida. Entre novamente com a nova senha do app.",
+      );
+    } catch (error) {
+      setLookupMessage(
+        resolveErrorMessage(
+          error,
+          "Não foi possível redefinir a senha deste CPF.",
+        ),
+      );
+    } finally {
+      setIsRecovering(false);
+    }
+  }
+
   function handleOpenPreview() {
     switchMode("preview");
     setAdvancedOpen(false);
@@ -377,11 +472,13 @@ const AuthPage = () => {
         ? "Verificação inicial"
         : stage === "profile"
           ? "Escolha do painel"
-          : stage === "register"
-            ? "Primeiro acesso"
-            : stage === "login"
-              ? "Acesso existente"
-              : "Seleção de contexto";
+            : stage === "register"
+              ? "Primeiro acesso"
+              : stage === "reset"
+                ? "Redefinição"
+              : stage === "login"
+                ? "Acesso existente"
+                : "Seleção de contexto";
 
     const description =
       lookupMessage ||
@@ -391,6 +488,10 @@ const AuthPage = () => {
           ? "Alguns CPFs podem operar como morador e síndico. Escolha qual painel deseja abrir nesta sessão."
           : stage === "register"
             ? "Defina a senha que ficará vinculada ao seu CPF para todos os contextos residenciais liberados."
+            : stage === "reset"
+              ? selectedProfileType === "SYNDIC"
+                ? "Defina a nova senha do síndico. Ela também atualizará a senha usada no portal Management."
+                : "Defina a nova senha do app para recuperar sua identidade vinculada ao CPF."
             : stage === "login"
               ? selectedProfileType === "SYNDIC"
                 ? "Use a senha já cadastrada no portal Management para o seu CPF."
@@ -401,7 +502,7 @@ const AuthPage = () => {
       <Alert className="rounded-[24px] border-border/70 bg-muted/35">
         {stage === "context" ? (
           <Network className="h-4 w-4" />
-        ) : stage === "register" ? (
+        ) : stage === "register" || stage === "reset" ? (
           <LockKeyhole className="h-4 w-4" />
         ) : stage === "login" ? (
           <KeyRound className="h-4 w-4" />
@@ -513,6 +614,7 @@ const AuthPage = () => {
   function renderLookupOrCredentialStage() {
     const isLoginStage = stage === "login";
     const isRegisterStage = stage === "register";
+    const isResetStage = stage === "reset";
 
     return (
       <div className="mt-5 flex flex-1 flex-col">
@@ -531,9 +633,15 @@ const AuthPage = () => {
             />
           </div>
 
-          {(isLoginStage || isRegisterStage) && (
+          {(isLoginStage || isRegisterStage || isResetStage) && (
             <div className="space-y-2">
-              <Label>{isRegisterStage ? "Crie sua senha" : "Senha"}</Label>
+              <Label>
+                {isRegisterStage
+                  ? "Crie sua senha"
+                  : isResetStage
+                    ? "Nova senha"
+                    : "Senha"}
+              </Label>
               <Input
                 type="password"
                 value={password}
@@ -543,6 +651,8 @@ const AuthPage = () => {
                     ? "Senha do portal Management"
                     : isRegisterStage
                       ? "Defina a senha do app"
+                      : isResetStage
+                        ? "Defina a nova senha"
                       : "Digite sua senha"
                 }
                 className="h-12 rounded-[18px] text-base"
@@ -550,7 +660,7 @@ const AuthPage = () => {
             </div>
           )}
 
-          {isRegisterStage && (
+          {(isRegisterStage || isResetStage) && (
             <div className="space-y-2">
               <Label>Confirmar senha</Label>
               <Input
@@ -589,6 +699,15 @@ const AuthPage = () => {
                 </Button>
                 <Button
                   type="button"
+                  variant="secondary"
+                  className="rounded-[18px]"
+                  disabled={isRecovering}
+                  onClick={() => void handleForgotPassword()}
+                >
+                  {isRecovering ? "Preparando redefinição..." : "Esqueci minha senha"}
+                </Button>
+                <Button
+                  type="button"
                   variant="ghost"
                   className="rounded-[18px]"
                   onClick={() => setStage("profile")}
@@ -604,7 +723,7 @@ const AuthPage = () => {
                   Consultar outro CPF
                 </Button>
               </>
-            ) : (
+            ) : isRegisterStage ? (
               <>
                 <Button
                   className="h-12 rounded-[20px]"
@@ -632,6 +751,38 @@ const AuthPage = () => {
                   onClick={resetToLookup}
                 >
                   Voltar para o CPF
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  className="h-12 rounded-[20px]"
+                  variant="accent"
+                  disabled={
+                    !password.trim() ||
+                    !confirmPassword.trim() ||
+                    isRecovering
+                  }
+                  onClick={() => void handleResetPassword()}
+                >
+                  {isRecovering ? "Redefinindo..." : "Salvar nova senha"}
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="rounded-[18px]"
+                  onClick={() => setStage("login")}
+                >
+                  Voltar para o login
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="rounded-[18px]"
+                  onClick={resetToLookup}
+                >
+                  Consultar outro CPF
                 </Button>
               </>
             )}

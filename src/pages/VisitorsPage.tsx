@@ -171,27 +171,116 @@ const VisitorsPage = () => {
     },
   });
 
+  async function copyTextSafely(text: string) {
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.clipboard?.writeText &&
+      window.isSecureContext
+    ) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Falls back to manual copy below.
+      }
+    }
+
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      textarea.style.pointerEvents = "none";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, textarea.value.length);
+      const copied = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      if (copied) {
+        return true;
+      }
+    } catch {
+      // Falls back to prompt below.
+    }
+
+    window.prompt("Copie manualmente o link do convite:", text);
+    return false;
+  }
+
+  function buildShareText(visitor: VisitorEntry) {
+    if (visitor.public_link) {
+      return `Seu link de convite Security Vision: ${visitor.public_link}`;
+    }
+
+    return `Convite ${visitor.guest_name}`;
+  }
+
+  async function ensureVisitorLink(visitor: VisitorEntry) {
+    if (visitor.public_link || snapshot.mode === "preview") {
+      return {
+        invitation: visitor,
+        generatedNow: false,
+      };
+    }
+
+    const rotated = await rotateLinkMutation.mutateAsync(visitor.id);
+    return {
+      invitation: rotated,
+      generatedNow: true,
+    };
+  }
+
+  async function handleCopy(visitor: VisitorEntry) {
+    try {
+      const { invitation } = await ensureVisitorLink(visitor);
+      const copied = await copyTextSafely(buildShareText(invitation));
+      toast.success(
+        copied
+          ? "Link do convite copiado."
+          : "Link pronto para cópia manual.",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Não foi possível copiar o link do convite.",
+      );
+    }
+  }
+
   async function handleShare(visitor: VisitorEntry) {
     try {
-      const invitationWithLink =
-        visitor.public_link || snapshot.mode === "preview"
-          ? visitor
-          : await rotateLinkMutation.mutateAsync(visitor.id);
-      const shareText = invitationWithLink.public_link
-        ? `Seu link de convite Security Vision: ${invitationWithLink.public_link}`
-        : `Convite ${invitationWithLink.guest_name}`;
+      const { invitation, generatedNow } = await ensureVisitorLink(visitor);
+      const shareText = buildShareText(invitation);
+
+      if (generatedNow) {
+        const copied = await copyTextSafely(shareText);
+        toast.success(
+          copied
+            ? "Link gerado e copiado. Toque novamente em compartilhar para abrir o menu do celular."
+            : "Link gerado. Compartilhe manualmente se o menu nativo não abrir.",
+        );
+        return;
+      }
 
       if (navigator.share) {
         try {
-          await navigator.share({ text: shareText });
+          await navigator.share({
+            text: shareText,
+            url: invitation.public_link ?? undefined,
+          });
           return;
         } catch {
           // Falls back to clipboard below.
         }
       }
 
-      await navigator.clipboard.writeText(shareText);
-      toast.success("Link do convite copiado.");
+      const copied = await copyTextSafely(shareText);
+      toast.success(
+        copied
+          ? "Link do convite copiado."
+          : "Link pronto para compartilhamento manual.",
+      );
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Não foi possível gerar o link do convite.",
@@ -505,7 +594,7 @@ const VisitorsPage = () => {
                     size="icon"
                     className="h-8 w-8 rounded-full"
                     disabled={rotateLinkMutation.isPending || !canCreateVisitors}
-                    onClick={() => handleShare(visitor)}
+                    onClick={() => handleCopy(visitor)}
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </Button>

@@ -1,112 +1,109 @@
-import { ArrowLeft, Package, CheckCircle2, Clock, MapPin } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { useNavigate } from "react-router-dom";
+import { CheckCircle2, Clock3, MapPin, Package } from "lucide-react";
 import { motion } from "framer-motion";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-interface Delivery {
-  id: string;
-  description: string;
-  carrier: string;
-  arrivedAt: string;
-  status: "waiting" | "collected";
-  location: string;
-}
-
-const mockDeliveries: Delivery[] = [
-  { id: "1", description: "Caixa média - Amazon", carrier: "Correios", arrivedAt: "Hoje, 09:30", status: "waiting", location: "Portaria 1" },
-  { id: "2", description: "Envelope - Documento", carrier: "Motoboy", arrivedAt: "Hoje, 11:15", status: "waiting", location: "Portaria 1" },
-  { id: "3", description: "Caixa grande - Magazine", carrier: "Transportadora", arrivedAt: "Ontem, 14:00", status: "collected", location: "Portaria 2" },
-  { id: "4", description: "Pacote pequeno - Mercado Livre", carrier: "Correios", arrivedAt: "07/03, 16:45", status: "collected", location: "Portaria 1" },
-];
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/features/shared/PageHeader";
+import { listDeliveries, markDeliveryCollected } from "@/services/mobile-app.service";
 
 const DeliveriesPage = () => {
-  const navigate = useNavigate();
-  const pending = mockDeliveries.filter(d => d.status === "waiting");
-  const collected = mockDeliveries.filter(d => d.status === "collected");
+  const queryClient = useQueryClient();
 
-  const handleCollect = (delivery: Delivery) => {
-    toast.success(`"${delivery.description}" marcada como retirada!`);
-  };
+  const deliveriesQuery = useQuery({
+    queryKey: ["local-deliveries"],
+    queryFn: async () => listDeliveries(),
+  });
+
+  const deliveries = deliveriesQuery.data ?? [];
+  const pending = deliveries.filter((delivery) => delivery.status === "waiting");
+  const collected = deliveries.filter((delivery) => delivery.status === "collected");
+
+  function handleCollect(id: number, description: string) {
+    markDeliveryCollected(id);
+    queryClient.invalidateQueries({ queryKey: ["local-deliveries"] });
+    toast.success(`"${description}" marcada como retirada.`);
+  }
 
   return (
-    <div className="px-4 pt-12 pb-4 space-y-6">
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate("/")}>
-          <ArrowLeft className="w-5 h-5" />
-        </Button>
-        <h1 className="text-xl font-bold text-foreground">Entregas</h1>
-      </div>
+    <div className="space-y-6 px-4 pb-6 pt-8">
+      <PageHeader
+        title="Entregas"
+        subtitle="Fluxo demonstrativo do módulo de encomendas para o app do morador."
+        backTo="/"
+      />
 
-      {pending.length > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <div className="bg-accent/10 border border-accent/20 rounded-2xl p-4 flex items-center gap-3 mb-2">
-            <Package className="w-5 h-5 text-accent" />
-            <p className="text-sm font-semibold text-foreground">
-              {pending.length} {pending.length === 1 ? "entrega aguardando" : "entregas aguardando"} retirada
-            </p>
+      {pending.length > 0 ? (
+        <div className="rounded-[24px] border border-warning/20 bg-warning/10 p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-warning text-warning-foreground">
+              <Package className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-foreground">{pending.length} entrega(s) aguardando retirada</p>
+              <p className="text-sm text-muted-foreground">Na próxima fase esse módulo será conectado ao backend de encomendas.</p>
+            </div>
           </div>
-        </motion.div>
-      )}
-
-      {pending.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-bold text-foreground">Aguardando Retirada</h2>
-          {pending.map((d, i) => (
-            <motion.div
-              key={d.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-              className="bg-card border border-border rounded-2xl p-4 space-y-3"
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="font-semibold text-foreground">{d.description}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{d.carrier} · {d.arrivedAt}</p>
-                </div>
-                <Badge variant="warning" className="gap-1">
-                  <Clock className="w-3 h-3" /> Aguardando
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <MapPin className="w-3 h-3" /> {d.location}
-                </span>
-                <Button variant="accent" size="sm" className="rounded-full text-xs" onClick={() => handleCollect(d)}>
-                  Confirmar Retirada
-                </Button>
-              </div>
-            </motion.div>
-          ))}
         </div>
-      )}
+      ) : null}
 
-      {collected.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-bold text-muted-foreground">Retiradas</h2>
-          {collected.map((d, i) => (
-            <motion.div
-              key={d.id}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.1 + i * 0.05 }}
-              className="bg-card border border-border rounded-2xl p-4 opacity-60"
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="font-medium text-foreground">{d.description}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{d.carrier} · {d.arrivedAt}</p>
-                </div>
-                <Badge variant="success" className="gap-1">
-                  <CheckCircle2 className="w-3 h-3" /> Retirada
-                </Badge>
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-muted-foreground">Na portaria</h2>
+        {pending.map((delivery, index) => (
+          <motion.div
+            key={delivery.id}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.04 }}
+            className="rounded-[24px] border border-border bg-card p-4 shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-base font-semibold text-foreground">{delivery.description}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{delivery.carrier} · {delivery.arrived_at}</p>
               </div>
-            </motion.div>
-          ))}
-        </div>
-      )}
+              <Badge variant="warning" className="gap-1.5">
+                <Clock3 className="h-3 w-3" />
+                Aguardando
+              </Badge>
+            </div>
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <MapPin className="h-3.5 w-3.5" />
+                {delivery.location}
+              </span>
+              <Button variant="accent" size="sm" className="rounded-full" onClick={() => handleCollect(delivery.id, delivery.description)}>
+                Confirmar retirada
+              </Button>
+            </div>
+          </motion.div>
+        ))}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-muted-foreground">Histórico</h2>
+        {collected.map((delivery, index) => (
+          <motion.div
+            key={delivery.id}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.08 + index * 0.03 }}
+            className="rounded-[24px] border border-border bg-card p-4 opacity-70 shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-base font-medium text-foreground">{delivery.description}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{delivery.carrier} · {delivery.arrived_at}</p>
+              </div>
+              <Badge variant="success" className="gap-1.5">
+                <CheckCircle2 className="h-3 w-3" />
+                Retirada
+              </Badge>
+            </div>
+          </motion.div>
+        ))}
+      </section>
     </div>
   );
 };

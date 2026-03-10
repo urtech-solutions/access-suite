@@ -1,31 +1,31 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Syne:wght@600;700;800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-
 @layer base {
   :root {
-    --background: 220 20% 97%;
-    --foreground: 222 47% 11%;
+    --background: 220 28% 97%;
+    --foreground: 220 43% 11%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 220 43% 11%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover-foreground: 220 43% 11%;
 
-    --primary: 222 60% 22%;
+    --primary: 219 63% 16%;
     --primary-foreground: 210 40% 98%;
 
-    --secondary: 215 25% 92%;
-    --secondary-foreground: 222 47% 11%;
+    --secondary: 214 24% 91%;
+    --secondary-foreground: 220 43% 11%;
 
-    --muted: 220 14% 94%;
-    --muted-foreground: 220 9% 46%;
+    --muted: 220 21% 94%;
+    --muted-foreground: 218 10% 44%;
 
-    --accent: 38 92% 50%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 39 94% 52%;
+    --accent-foreground: 220 43% 11%;
 
     --success: 152 60% 42%;
     --success-foreground: 0 0% 100%;
@@ -39,9 +39,9 @@
     --destructive: 0 72% 51%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 222 60% 22%;
+    --border: 220 20% 90%;
+    --input: 220 20% 90%;
+    --ring: 219 63% 16%;
 
     --radius: 0.75rem;
 
@@ -93,14 +93,30 @@
 
   body {
     @apply bg-background text-foreground font-sans;
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-family: 'Manrope', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    background-image:
+      radial-gradient(circle at top right, rgba(245, 158, 11, 0.12), transparent 28%),
+      radial-gradient(circle at top left, rgba(15, 23, 42, 0.08), transparent 22%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(241, 245, 249, 0.92));
+    background-attachment: fixed;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: 'Syne', sans-serif;
+    letter-spacing: -0.03em;
   }
 }
 
 @layer utilities {
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
   }
 }

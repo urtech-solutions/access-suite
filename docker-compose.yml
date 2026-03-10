@@ -1,0 +1,59 @@
+# =============================================================================
+# Security Vision Access — Runtime Mobile em Docker
+# =============================================================================
+# Padrao:
+#   docker compose up -d --build
+#   # App runtime disponivel em http://SEU_IP_LOCAL:${ACCESS_SUITE_PORT:-8088}
+#   # Configurado para refletir o ambiente real do app (modo backend)
+#
+# Desenvolvimento com hot reload:
+#   docker compose --profile dev up -d --build access_dev
+#   # App disponivel em http://SEU_IP_LOCAL:${ACCESS_SUITE_DEV_PORT:-8080}
+#
+# Variaveis:
+#   cp .env.docker.example .env.docker
+#   docker compose --env-file .env.docker up -d --build
+# =============================================================================
+
+services:
+  access_app:
+    container_name: security_vision_access_app
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_APP_MODE: ${VITE_APP_MODE:-backend}
+    image: security-vision/access-suite:runtime
+    restart: unless-stopped
+    ports:
+      - '${ACCESS_SUITE_PORT:-8088}:80'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO', '/dev/null', 'http://127.0.0.1/']
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  access_dev:
+    container_name: security_vision_access_dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    image: security-vision/access-suite:dev
+    restart: unless-stopped
+    profiles: ['dev']
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-}
+      CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-true}
+    ports:
+      - '${ACCESS_SUITE_DEV_PORT:-8080}:8080'
+    volumes:
+      - .:/app
+      - access_suite_node_modules:/app/node_modules
+    command: npm run dev:mobile
+
+volumes:
+  access_suite_node_modules:

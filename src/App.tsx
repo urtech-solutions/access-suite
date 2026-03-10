@@ -1,39 +1,83 @@
-import { Toaster } from "@/components/ui/toaster";
-import { Toaster as Sonner } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import AppLayout from "@/components/layout/AppLayout";
-import HomePage from "./pages/HomePage";
-import VisitorsPage from "./pages/VisitorsPage";
-import DeliveriesPage from "./pages/DeliveriesPage";
-import IncidentsPage from "./pages/IncidentsPage";
-import ChatPage from "./pages/ChatPage";
-import BulletinPage from "./pages/BulletinPage";
-import NotFound from "./pages/NotFound";
+import { Suspense, lazy } from "react";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 
-const queryClient = new QueryClient();
+import AppLayout from "@/components/layout/AppLayout";
+import { useSession } from "@/features/session/SessionProvider";
+import { AppProviders } from "@/providers/AppProviders";
+
+const AuthPage = lazy(() => import("@/pages/AuthPage"));
+const BulletinPage = lazy(() => import("@/pages/BulletinPage"));
+const ChatPage = lazy(() => import("@/pages/ChatPage"));
+const CommonAreasPage = lazy(() => import("@/pages/CommonAreasPage"));
+const DeliveriesPage = lazy(() => import("@/pages/DeliveriesPage"));
+const HomePage = lazy(() => import("@/pages/HomePage"));
+const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
+const NotFound = lazy(() => import("@/pages/NotFound"));
+const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
+const VisitorsPage = lazy(() => import("@/pages/VisitorsPage"));
+
+const ScreenLoader = () => (
+  <div className="flex min-h-screen items-center justify-center bg-background px-6 text-center text-sm text-muted-foreground">
+    Carregando módulo do app...
+  </div>
+);
+
+const AuthRoute = () => {
+  const { snapshot, isAuthenticated, isHydratingSession } = useSession();
+
+  if (isHydratingSession) {
+    return <ScreenLoader />;
+  }
+
+  if (snapshot.mode === "backend" && isAuthenticated) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <AuthPage />;
+};
+
+const ProtectedShell = () => {
+  const location = useLocation();
+  const { snapshot, isAuthenticated, isHydratingSession } = useSession();
+
+  if (isHydratingSession) {
+    return <ScreenLoader />;
+  }
+
+  if (snapshot.mode === "backend" && !isAuthenticated) {
+    return <Navigate to="/auth" replace state={{ from: location }} />;
+  }
+
+  return <AppLayout />;
+};
 
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
+  <AppProviders>
+    <BrowserRouter>
+      <Suspense fallback={<ScreenLoader />}>
         <Routes>
-          <Route element={<AppLayout />}>
+          <Route path="/auth" element={<AuthRoute />} />
+          <Route element={<ProtectedShell />}>
             <Route path="/" element={<HomePage />} />
             <Route path="/visitors" element={<VisitorsPage />} />
+            <Route path="/common-areas" element={<CommonAreasPage />} />
             <Route path="/deliveries" element={<DeliveriesPage />} />
             <Route path="/incidents" element={<IncidentsPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/bulletin" element={<BulletinPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
+      </Suspense>
+    </BrowserRouter>
+  </AppProviders>
 );
 
 export default App;

@@ -1,25 +1,11 @@
-import { ArrowLeft, Megaphone, Pin, Calendar } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { useNavigate } from "react-router-dom";
+import { CalendarDays, Megaphone, Pin } from "lucide-react";
 import { motion } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 
-interface Notice {
-  id: string;
-  title: string;
-  content: string;
-  author: string;
-  date: string;
-  pinned: boolean;
-  category: "aviso" | "manutencao" | "evento" | "regra";
-}
-
-const mockNotices: Notice[] = [
-  { id: "1", title: "Manutenção do elevador - Bloco A", content: "O elevador do bloco A ficará em manutenção no dia 15/03, das 8h às 12h. Utilizem o elevador de serviço.", author: "Administração", date: "08/03/2026", pinned: true, category: "manutencao" },
-  { id: "2", title: "Assembleia Geral Ordinária", content: "Convidamos todos os condôminos para a assembleia geral que acontecerá dia 20/03 às 19h no salão de festas.", author: "Síndico Roberto", date: "07/03/2026", pinned: true, category: "evento" },
-  { id: "3", title: "Horário de mudanças", content: "Lembramos que mudanças devem ser agendadas com antecedência e realizadas de segunda a sábado, das 8h às 17h.", author: "Administração", date: "05/03/2026", pinned: false, category: "regra" },
-  { id: "4", title: "Dedetização programada", content: "A dedetização das áreas comuns será realizada no dia 12/03. Mantenham janelas fechadas durante o procedimento.", author: "Zelador Marcos", date: "04/03/2026", pinned: false, category: "aviso" },
-];
+import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/features/shared/PageHeader";
+import { useSession } from "@/features/session/SessionProvider";
+import { listBulletin } from "@/services/mobile-app.service";
 
 const categoryConfig = {
   aviso: { label: "Aviso", variant: "info" as const },
@@ -28,87 +14,99 @@ const categoryConfig = {
   regra: { label: "Regra", variant: "secondary" as const },
 };
 
+function formatCreatedAt(value: string) {
+  return new Date(value).toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
 const BulletinPage = () => {
-  const navigate = useNavigate();
-  const pinned = mockNotices.filter(n => n.pinned);
-  const regular = mockNotices.filter(n => !n.pinned);
+  const { snapshot, connectionState } = useSession();
+
+  const bulletinQuery = useQuery({
+    queryKey: ["bulletin", snapshot.mode, connectionState],
+    queryFn: () => listBulletin(snapshot, connectionState),
+  });
+
+  const posts = bulletinQuery.data ?? [];
+  const pinned = posts.filter((post) => post.pinned);
+  const regular = posts.filter((post) => !post.pinned);
 
   return (
-    <div className="px-4 pt-12 pb-4 space-y-6">
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate("/")}>
-          <ArrowLeft className="w-5 h-5" />
-        </Button>
-        <h1 className="text-xl font-bold text-foreground flex-1">Mural de Avisos</h1>
-        <Megaphone className="w-5 h-5 text-muted-foreground" />
-      </div>
+    <div className="space-y-6 px-4 pb-6 pt-8">
+      <PageHeader
+        title="Mural de avisos"
+        subtitle="Informativos priorizados por gestão, síndico e operação."
+        backTo="/"
+      />
 
-      {pinned.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-            <Pin className="w-3 h-3" /> Fixados
-          </h2>
-          {pinned.map((notice, i) => {
-            const config = categoryConfig[notice.category];
+      {pinned.length > 0 ? (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">
+            <Pin className="h-3.5 w-3.5" />
+            Fixados
+          </div>
+          {pinned.map((post, index) => {
+            const config = categoryConfig[post.category];
             return (
               <motion.div
-                key={notice.id}
-                initial={{ opacity: 0, y: 10 }}
+                key={post.id}
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05 }}
-                className="bg-card border-2 border-accent/20 rounded-2xl p-4 space-y-2"
+                transition={{ delay: index * 0.05 }}
+                className="rounded-[26px] border border-accent/30 bg-card p-5 shadow-sm"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1">
-                    <Badge variant={config.variant} className="text-[10px] mb-1.5">{config.label}</Badge>
-                    <p className="font-semibold text-foreground">{notice.title}</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <Badge variant={config.variant}>{config.label}</Badge>
+                    <h2 className="mt-3 text-lg font-semibold text-foreground">{post.title}</h2>
+                    <p className="mt-3 text-sm leading-6 text-muted-foreground">{post.content}</p>
+                    <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                      <CalendarDays className="h-3.5 w-3.5" />
+                      {formatCreatedAt(post.created_at)}
+                    </div>
                   </div>
-                  <Pin className="w-4 h-4 text-accent shrink-0 mt-1" />
-                </div>
-                <p className="text-sm text-muted-foreground leading-relaxed">{notice.content}</p>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Calendar className="w-3 h-3" />
-                  <span>{notice.date}</span>
-                  <span>·</span>
-                  <span>{notice.author}</span>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
+                    <Megaphone className="h-5 w-5" />
+                  </div>
                 </div>
               </motion.div>
             );
           })}
-        </div>
-      )}
+        </section>
+      ) : null}
 
-      {regular.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Recentes</h2>
-          {regular.map((notice, i) => {
-            const config = categoryConfig[notice.category];
-            return (
-              <motion.div
-                key={notice.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 + i * 0.05 }}
-                className="bg-card border border-border rounded-2xl p-4 space-y-2"
-              >
-                <div className="flex items-start gap-2">
-                  <div className="flex-1">
-                    <Badge variant={config.variant} className="text-[10px] mb-1.5">{config.label}</Badge>
-                    <p className="font-semibold text-foreground">{notice.title}</p>
-                  </div>
-                </div>
-                <p className="text-sm text-muted-foreground leading-relaxed">{notice.content}</p>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Calendar className="w-3 h-3" />
-                  <span>{notice.date}</span>
-                  <span>·</span>
-                  <span>{notice.author}</span>
-                </div>
-              </motion.div>
-            );
-          })}
-        </div>
-      )}
+      <section className="space-y-3">
+        <div className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">Recentes</div>
+        {regular.map((post, index) => {
+          const config = categoryConfig[post.category];
+          return (
+            <motion.div
+              key={post.id}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 + index * 0.04 }}
+              className="rounded-[24px] border border-border bg-card p-4 shadow-sm"
+            >
+              <Badge variant={config.variant}>{config.label}</Badge>
+              <h3 className="mt-3 text-base font-semibold text-foreground">{post.title}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{post.content}</p>
+              <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                <CalendarDays className="h-3.5 w-3.5" />
+                {formatCreatedAt(post.created_at)}
+              </div>
+            </motion.div>
+          );
+        })}
+
+        {posts.length === 0 ? (
+          <div className="rounded-[24px] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
+            Nenhum aviso disponível no momento.
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 };

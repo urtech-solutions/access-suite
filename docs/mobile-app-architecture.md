@@ -65,11 +65,12 @@ O backend agora possui uma autenticação própria para o morador, desacoplada d
 
 Após validação deste MVP:
 
-1. evoluir recuperação de senha/OTP e convite assistido;
-2. extrair um SDK compartilhado de APIs e contratos;
-3. trocar persistência local do MVP por `IndexedDB`/fila robusta;
-4. empacotar com `Capacitor` para Android/iOS;
-5. evoluir chat, voz, notificações push e encomendas para backend dedicado.
+1. fechar `Entregas` ponta a ponta;
+2. evoluir `Chat` textual com imagens, anexos e audios;
+3. subir `realtime` e notificacoes push;
+4. implementar `Voz`;
+5. fechar `Video` como ultimo corte do MVP desejado;
+6. empacotar com `Capacitor` para Android/iOS.
 
 ## Backlog operacional
 
@@ -79,10 +80,10 @@ O backlog priorizado para fechamento da visão de condomínios está em:
 
 O foco imediato passa a ser:
 
-1. `Identidade e Sessão`
-2. `Visitantes`
-
-`Reservas de Áreas Comuns` segue em trilha separada por depender de regras específicas do produto.
+1. endurecimento final de `Visitantes`
+2. endurecimento final de `Áreas Comuns`
+3. `Entregas`
+4. `Chat` com mídia
 
 ## Roadmap incremental
 
@@ -92,11 +93,13 @@ O foco imediato passa a ser:
 - validação de UX e domínio
 
 ### Fase B
-- auth nativo de morador
+- entregas persistidas no backend
+- chat textual com midia
 - push notifications
-- entregas e chat persistidos no backend
+- realtime operacional
 
 ### Fase C
+- voz e video
 - Capacitor + stores
 - recursos nativos de câmera, biometria e notificações
 - observabilidade mobile e analytics operacional

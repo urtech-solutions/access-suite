@@ -6,10 +6,10 @@ Organizar o fechamento da visao de condominios do app mobile em um backlog incre
 
 ## Escopo Deste Backlog
 
-- foco imediato em `Identidade e Sessao`;
-- foco imediato em `Visitantes`;
-- `Reservas de Areas Comuns` fica fora deste backlog e sera tratada em trilha propria;
-- os demais modulos entram como `Next` e `Later`, sem detalhamento de implementacao nesta etapa.
+- registrar o que ja foi fechado no MVP;
+- consolidar o que ainda falta para a visao de condominio chegar ao corte desejado;
+- ordenar a execucao dos proximos modulos sem abrir reescrita desnecessaria;
+- manter backend, `management` e app mobile evoluindo em ondas pequenas e integradas.
 
 ## Estado Atual
 
@@ -19,6 +19,30 @@ Organizar o fechamento da visao de condominios do app mobile em um backlog incre
 - o app ja consome backend real para `visitors`, `incidents`, `bulletin`, `common-areas` e `reservations`;
 - a troca de residencia/contexto ja existe no app, mas ainda precisa endurecimento de UX, seguranca de sessao e regras operacionais.
 
+## Fechado Ate Aqui
+
+- `AUTH`
+  - login por `CPF + senha`;
+  - primeiro acesso;
+  - recuperacao e troca de senha em corte MVP;
+  - sessao por dispositivo;
+  - troca de contexto;
+  - perfil `Morador` e `Sindico`.
+- `VIS`
+  - criacao de convite;
+  - regras por site;
+  - compartilhamento de link;
+  - aprovacao pelo morador;
+  - cancelamento e historico;
+  - retorno operacional e inbox local.
+- `AREAS`
+  - cadastro de areas comuns no `Management`;
+  - agenda visual no app;
+  - criacao de reserva;
+  - aprovacao no `Management`;
+  - link unico para convidados;
+  - endurecimento de conflito, lotacao e janela operacional.
+
 ## Meta De Saida Da Visao Condominio
 
 Consideraremos a visao de condominios pronta quando:
@@ -27,26 +51,34 @@ Consideraremos a visao de condominios pronta quando:
 - o mesmo CPF conseguir operar multiplos sites e tenants com troca de contexto clara;
 - primeiro acesso, troca de senha e recuperacao de acesso estiverem fechados;
 - visitantes estiverem ponta a ponta, com regras, notificacoes e auditoria;
-- mural, incidentes, entregas e chat estiverem operacionais em trilhas posteriores;
+- areas comuns estiverem operacionais para o morador e com aprovacao madura;
+- entregas estiverem ponta a ponta;
+- chat textual com anexos e audio estiver operacional;
+- voz interna estiver funcional;
+- video estiver fechado como ultimo corte do MVP desejado;
 - o app estiver pronto para empacotamento com `Capacitor`.
 
 ## Prioridades
 
+### Done
+
+- `AUTH` Identidade e Sessao base
+- `VIS` Visitantes base
+- `AREAS` Areas Comuns base
+
 ### Now
 
-- `AUTH` Identidade e Sessao
-- `VIS` Visitantes
+- `DEL` Encomendas
+- `CHAT` Chat textual com imagens e audios
 
 ### Next
 
-- `BUL` Mural e notificacoes
-- `INC` Incidentes e chamados
-- `DEL` Encomendas
+- `RT` Realtime e notificacoes push
+- `VOICE` chamadas de voz
 
 ### Later
 
-- `CHAT` Chat condominial
-- `VOICE` chamadas de voz
+- `VIDEO` chamadas de video
 - `PKG` empacotamento mobile, push e recursos nativos
 
 ## Epic AUTH - Identidade E Sessao
@@ -387,14 +419,43 @@ Fechar a comunicacao do morador sobre o estado do visitante.
 
 ### DEL - Encomendas
 
-- aviso de recebimento;
+- cadastro da encomenda por operacao/portaria;
+- notificacao ao morador;
+- lista de pendentes e retiradas;
 - confirmacao de retirada;
-- historico auditavel por unidade.
+- historico auditavel por unidade e por site;
+- permissao de consulta para sindico conforme contexto.
 
 ### CHAT - Chat Condominial
 
-- conversas 1:1, grupos e regras de visibilidade;
-- anexos, unread, mute e moderacao.
+- conversas `1:1` e grupos;
+- regras de visibilidade e criacao vindas do `Management`;
+- anexos de imagem e arquivo;
+- audio gravado no chat;
+- unread, mute e moderacao basica;
+- portaria, moradores, sindico e zeladoria no mesmo contrato.
+
+### RT - Realtime E Notificacoes
+
+- `WebSocket` ou `SSE` para chat, entregas e avisos;
+- push notifications por contexto ativo;
+- badges, central de notificacoes e links internos;
+- eventos tecnicos e operacionais observaveis.
+
+### VOICE - Chamadas De Voz
+
+- chamada `1:1` no contexto do chat;
+- regra de permissao por perfil;
+- sinalizacao da chamada;
+- historico basico;
+- experiencia mobile-first.
+
+### VIDEO - Chamadas De Video
+
+- chamada `1:1` como extensao da trilha de voz;
+- reaproveitamento da mesma infraestrutura de sinalizacao;
+- permissoes, historico e notificacao;
+- entra apenas depois de chat textual, midia e voz estabilizados.
 
 ### PKG - Empacotamento E Mobile Nativo
 
@@ -409,40 +470,48 @@ Fechar a comunicacao do morador sobre o estado do visitante.
 
 ### Onda 1
 
-- `AUTH-01`
-- `AUTH-02`
+- endurecimento final de `VIS`
+- endurecimento final de `AREAS`
 
 ### Onda 2
 
-- `AUTH-03`
-- `AUTH-04`
-- `AUTH-05`
+- `DEL`
 
 ### Onda 3
 
-- `VIS-01`
-- `VIS-02`
+- `CHAT` textual
+- imagens e anexos
+- audio gravado
 
 ### Onda 4
 
-- `VIS-03`
-- `VIS-04`
-- `VIS-05`
+- `RT`
+- inbox/push
+
+### Onda 5
+
+- `VOICE`
+
+### Onda 6
+
+- `VIDEO`
+- `PKG`
 
 ## Definicao De Pronto Da Proxima Fase
 
 A proxima fase estara fechada quando:
 
-- multi-contexto por CPF estiver estavel;
-- primeiro acesso e recuperacao de senha estiverem operacionais;
-- sessao estiver segura e auditavel;
-- o modulo de visitantes funcionar do app ate a operacao, com historico e status reais.
+- o modulo de `Entregas` estiver ponta a ponta;
+- o morador receber aviso, consultar e confirmar retirada;
+- o `Management` e a operacao enxergarem o mesmo estado da encomenda;
+- houver trilha minima de auditoria por unidade e por site.
 
 ## Proxima Acao Sugerida
 
-Iniciar por `AUTH-01` com este corte tecnico:
+Iniciar por `DEL-01` com este corte tecnico:
 
-1. padronizar `context_label` e `unit_label` no backend;
-2. ajustar o app para usar esses campos como fallback visual principal;
-3. revisar `refresh/me` para sempre devolver todos os contextos ativos do CPF;
-4. criar bateria de testes de regressao para CPF com multiplos tenants e contextos parciais.
+1. modelar `deliveries` no backend com status canonicos;
+2. expor tela e regras basicas no `Management`;
+3. ligar o app do morador a lista de pendentes/retiradas;
+4. publicar notificacao local do recebimento;
+5. fechar confirmacao de retirada com auditoria.

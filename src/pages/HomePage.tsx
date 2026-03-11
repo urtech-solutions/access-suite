@@ -25,6 +25,7 @@ import { ResidenceContextToggle } from "@/features/session/ActiveResidenceSwitch
 import { ConnectivityPill } from "@/features/shared/ConnectivityPill";
 import { useSession } from "@/features/session/SessionProvider";
 import {
+  getDeliverySettings,
   listBulletin,
   listCommonAreas,
   listDeliveries,
@@ -42,18 +43,16 @@ function formatWhen(value: string) {
   });
 }
 
-const quickActions = [
-  { icon: Users, label: "Visitantes", path: "/visitors", tone: "bg-info/15 text-info" },
-  { icon: CalendarClock, label: "Áreas", path: "/common-areas", tone: "bg-success/15 text-success" },
-  { icon: Package, label: "Entregas", path: "/deliveries", tone: "bg-warning/15 text-warning" },
-  { icon: AlertTriangle, label: "Incidentes", path: "/incidents", tone: "bg-destructive/15 text-destructive" },
-  { icon: Megaphone, label: "Mural", path: "/bulletin", tone: "bg-primary/10 text-primary" },
-  { icon: UserRound, label: "Perfil", path: "/profile", tone: "bg-secondary text-secondary-foreground" },
-];
+function resolveGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Bom dia";
+  if (hour < 18) return "Boa tarde";
+  return "Boa noite";
+}
 
 const HomePage = () => {
   const navigate = useNavigate();
-  const { resident, snapshot, connectionState, pendingActionsCount } = useSession();
+  const { resident, snapshot, connectionState } = useSession();
 
   const visitorsQuery = useQuery({
     queryKey: ["visitors", resident.id, snapshot.mode, connectionState],
@@ -80,15 +79,85 @@ const HomePage = () => {
     queryFn: () => listCommonAreas(snapshot, connectionState),
   });
 
-  const deliveries = listDeliveries();
-  const visitorCount = visitorsQuery.data?.filter((item) => item.status === "PENDING" || item.status === "ACTIVE").length ?? 0;
+  const deliverySettingsQuery = useQuery({
+    queryKey: ["deliveries-settings", resident.site_id, snapshot.mode, connectionState],
+    queryFn: () => getDeliverySettings(snapshot, connectionState),
+  });
+
+  const deliveriesQuery = useQuery({
+    queryKey: ["deliveries", resident.id, snapshot.mode, connectionState],
+    queryFn: () => listDeliveries(snapshot, connectionState, resident),
+    enabled: deliverySettingsQuery.data?.enabled !== false,
+  });
+
+  const deliveryEnabled =
+    resident.role === "MORADOR" && deliverySettingsQuery.data?.enabled !== false;
+
+  const quickActions = [
+    {
+      icon: Users,
+      label: "Visitantes",
+      path: "/visitors",
+      tone: "bg-blue-500/10 text-blue-500",
+      description: "Convites e acessos",
+    },
+    {
+      icon: CalendarClock,
+      label: "Áreas comuns",
+      path: "/common-areas",
+      tone: "bg-emerald-500/10 text-emerald-500",
+      description: "Reservar espaços",
+    },
+    ...(deliveryEnabled
+      ? [
+          {
+            icon: Package,
+            label: "Entregas",
+            path: "/deliveries",
+            tone: "bg-amber-500/10 text-amber-500",
+            description: "Na portaria",
+          },
+        ]
+      : []),
+    {
+      icon: AlertTriangle,
+      label: "Incidentes",
+      path: "/incidents",
+      tone: "bg-red-500/10 text-red-500",
+      description: "Reportar problemas",
+    },
+    {
+      icon: Megaphone,
+      label: "Mural",
+      path: "/bulletin",
+      tone: "bg-violet-500/10 text-violet-500",
+      description: "Avisos e notícias",
+    },
+    {
+      icon: UserRound,
+      label: "Perfil",
+      path: "/profile",
+      tone: "bg-slate-500/10 text-slate-500",
+      description: "Conta e sessão",
+    },
+  ];
+
+  const deliveries = deliveriesQuery.data ?? [];
+  const visitorCount =
+    visitorsQuery.data?.filter(
+      (item) => item.status === "PENDING" || item.status === "ACTIVE",
+    ).length ?? 0;
   const reservationCount =
     reservationsQuery.data?.filter(
       (item) => item.person.id === resident.id && item.status === "CONFIRMED",
     ).length ?? 0;
-  const waitingDeliveries = deliveries.filter((item) => item.status === "waiting").length;
-  const openIncidents = incidentsQuery.data?.filter((item) => item.status === "OPEN" || item.status === "IN_PROGRESS").length ?? 0;
-  const pinnedNotice = bulletinQuery.data?.find((item) => item.pinned) ?? bulletinQuery.data?.[0];
+  const waitingDeliveries = deliveries.filter((item) => item.status === "ARRIVED").length;
+  const openIncidents =
+    incidentsQuery.data?.filter(
+      (item) => item.status === "OPEN" || item.status === "IN_PROGRESS",
+    ).length ?? 0;
+  const pinnedNotice =
+    bulletinQuery.data?.find((item) => item.pinned) ?? bulletinQuery.data?.[0];
   const residentNotifications = useMemo(
     () => deriveResidentNotifications(resident, visitorsQuery.data ?? []),
     [resident, visitorsQuery.data],
@@ -108,7 +177,11 @@ const HomePage = () => {
     ...(visitorsQuery.data ?? []).slice(0, 2).map((visitor) => ({
       id: `visitor-${visitor.id}`,
       title: `${visitor.guest_name} com acesso ${visitor.status === "USED" ? "utilizado" : "agendado"}`,
-      when: formatWhen(visitor.status === "USED" ? visitor.used_at ?? visitor.visit_date : visitor.visit_date),
+      when: formatWhen(
+        visitor.status === "USED"
+          ? (visitor.used_at ?? visitor.visit_date)
+          : visitor.visit_date,
+      ),
       badge: "Visitante",
       variant: "info" as const,
     })),
@@ -121,181 +194,206 @@ const HomePage = () => {
     })),
   ].slice(0, 4);
 
+  const stats = [
+    { label: "Convites ativos", value: visitorCount, icon: Users, tone: "text-blue-500" },
+    { label: "Reservas confirmadas", value: reservationCount, icon: CalendarClock, tone: "text-emerald-500" },
+    { label: "Entregas na portaria", value: waitingDeliveries, icon: Package, tone: "text-amber-500" },
+    { label: "Incidentes em aberto", value: openIncidents, icon: Shield, tone: "text-red-500" },
+  ];
+
   return (
-    <div className="space-y-6 px-4 pb-6 pt-8">
+    <div className="space-y-4 px-4 pb-6 pt-6">
+      {/* Hero header */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative overflow-hidden rounded-[28px] border border-primary/10 bg-primary px-5 pb-5 pt-5 text-primary-foreground shadow-2xl shadow-primary/15"
+        className="relative overflow-hidden rounded-[28px] border border-primary/10 bg-primary px-5 pb-5 pt-5 text-primary-foreground shadow-xl shadow-primary/15"
       >
-        <div className="absolute inset-x-0 top-0 h-24 bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.35),_transparent_45%)]" />
-        <div className="relative z-10 space-y-4">
+        <div className="absolute inset-x-0 top-0 h-28 bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.30),transparent_50%)]" />
+
+        <div className="relative z-10">
+          {/* Top row: greeting + bell */}
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.28em] text-primary-foreground/60">Security Vision Access</p>
-              <h1 className="mt-2 text-2xl font-extrabold tracking-tight">{resident.name}</h1>
+            <div className="min-w-0">
+              <p className="text-[0.7rem] font-medium uppercase tracking-[0.3em] text-primary-foreground/50">
+                {resolveGreeting()},
+              </p>
+              <h1 className="mt-1 truncate text-[1.5rem] font-extrabold leading-tight tracking-tight">
+                {resident.name.split(" ")[0]}
+              </h1>
+              <div className="mt-1.5 flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${
+                    resident.role === "SINDICO"
+                      ? "bg-amber-400/20 text-amber-300"
+                      : "bg-primary-foreground/10 text-primary-foreground/70"
+                  }`}
+                >
+                  {resident.role === "SINDICO" ? "Síndico" : "Morador"}
+                </span>
+              </div>
             </div>
+
             <Button
               variant="ghost"
               size="icon"
-              className="relative rounded-2xl border border-primary-foreground/15 bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/15"
+              className="relative mt-0.5 shrink-0 rounded-2xl border border-primary-foreground/15 bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/20"
               onClick={() => navigate("/notifications")}
             >
               <Bell className="h-5 w-5" />
-              {unreadNotificationCount > 0 ? (
-                <span className="absolute right-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-bold text-warning-foreground">
+              {unreadNotificationCount > 0 && (
+                <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-400 px-1 text-[9px] font-bold text-slate-900">
                   {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
                 </span>
-              ) : null}
+              )}
             </Button>
           </div>
 
-          <ResidenceContextToggle variant="hero" />
-
-          <ConnectivityPill />
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-2xl border border-primary-foreground/10 bg-primary-foreground/10 p-3">
-              <p className="text-xs text-primary-foreground/60">Modo atual</p>
-              <p className="mt-1 text-lg font-semibold">{snapshot.mode === "preview" ? "Preview residencial" : "Conectado ao backend"}</p>
-            </div>
-            <div className="rounded-2xl border border-primary-foreground/10 bg-primary-foreground/10 p-3">
-              <p className="text-xs text-primary-foreground/60">Fila operacional</p>
-              <p className="mt-1 text-lg font-semibold">{pendingActionsCount} pendente{pendingActionsCount === 1 ? "" : "s"}</p>
-            </div>
+          {/* Context + connectivity */}
+          <div className="mt-4 space-y-2.5">
+            <ResidenceContextToggle variant="hero" />
+            <ConnectivityPill />
           </div>
         </div>
       </motion.div>
 
-      {pendingApprovalCount > 0 || unreadNotificationCount > 0 ? (
+      {/* Pending notification banner */}
+      {(pendingApprovalCount > 0 || unreadNotificationCount > 0) && (
         <motion.button
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.03 }}
           onClick={() => navigate("/notifications")}
-          className="w-full rounded-[24px] border border-warning/20 bg-warning/10 p-4 text-left shadow-sm"
+          className="w-full rounded-[22px] border border-amber-400/20 bg-amber-400/8 p-4 text-left transition-colors hover:bg-amber-400/12"
         >
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex h-11 w-11 items-center justify-center rounded-2xl bg-warning text-warning-foreground">
-              <Bell className="h-5 w-5" />
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-400 text-slate-900">
+              <Bell className="h-4.5 w-4.5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-                Notificações do app
-              </p>
-              <p className="mt-1 text-base font-semibold text-foreground">
+              <p className="text-[0.8125rem] font-semibold text-foreground">
                 {pendingApprovalCount > 0
-                  ? `${pendingApprovalCount} cadastro(s) aguardando sua aprovação`
-                  : `${unreadNotificationCount} atualização(ões) novas na sua caixa operacional`}
+                  ? `${pendingApprovalCount} cadastro(s) aguardando aprovação`
+                  : `${unreadNotificationCount} notificação(ões) não lidas`}
               </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {monitoringCount > 0
-                  ? `${monitoringCount} retorno(s) operacional(is) de convites já estão disponíveis para acompanhamento.`
-                  : "Abra a caixa operacional para revisar os convites do contexto ativo."}
-              </p>
+              {monitoringCount > 0 && (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {monitoringCount} retorno(s) operacional(is) disponíveis
+                </p>
+              )}
             </div>
-            <ChevronRight className="mt-1 h-4 w-4 text-muted-foreground" />
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
           </div>
         </motion.button>
-      ) : null}
+      )}
 
+      {/* Quick actions - 2 columns */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.05 }}
-        className="grid grid-cols-3 gap-3"
       >
-        {quickActions.map((action) => (
-          <button
-            key={action.label}
-            onClick={() => navigate(action.path)}
-            className="rounded-[22px] border border-border bg-card px-3 py-4 text-left shadow-sm transition-transform duration-200 hover:-translate-y-0.5"
-          >
-            <div className={`mb-3 flex h-11 w-11 items-center justify-center rounded-2xl ${action.tone}`}>
-              <action.icon className="h-5 w-5" />
-            </div>
-            <p className="text-sm font-semibold text-foreground">{action.label}</p>
-          </button>
-        ))}
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-foreground">Acesso rápido</h2>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {quickActions.map((action) => (
+            <button
+              key={action.label}
+              onClick={() => navigate(action.path)}
+              className="flex items-center gap-3 rounded-[20px] border border-border bg-card px-4 py-3.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+            >
+              <div
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] ${action.tone}`}
+              >
+                <action.icon className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-foreground">{action.label}</p>
+                <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                  {action.description}
+                </p>
+              </div>
+            </button>
+          ))}
+        </div>
       </motion.div>
 
+      {/* Stats */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="grid grid-cols-2 gap-3"
+        transition={{ delay: 0.09 }}
       >
-        {[
-          {
-            label: "Convites ativos",
-            value: visitorCount,
-            icon: Users,
-            tone: "text-info",
-          },
-          {
-            label: "Reservas confirmadas",
-            value: reservationCount,
-            icon: CalendarClock,
-            tone: "text-success",
-          },
-          {
-            label: "Entregas na portaria",
-            value: waitingDeliveries,
-            icon: Package,
-            tone: "text-warning",
-          },
-          {
-            label: "Incidentes em aberto",
-            value: openIncidents,
-            icon: Shield,
-            tone: "text-destructive",
-          },
-        ].map((item) => (
-          <div key={item.label} className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
-            <item.icon className={`h-5 w-5 ${item.tone}`} />
-            <p className="mt-5 text-2xl font-bold text-foreground">{item.value}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{item.label}</p>
-          </div>
-        ))}
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-foreground">Resumo</h2>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {stats.map((item) => (
+            <div
+              key={item.label}
+              className="rounded-[20px] border border-border bg-card p-4 shadow-sm"
+            >
+              <item.icon className={`h-4.5 w-4.5 ${item.tone}`} />
+              <p className="mt-4 text-2xl font-bold tracking-tight text-foreground">
+                {item.value}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{item.label}</p>
+            </div>
+          ))}
+        </div>
       </motion.div>
 
-      {pinnedNotice ? (
+      {/* Pinned bulletin */}
+      {pinnedNotice && (
         <motion.button
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
+          transition={{ delay: 0.13 }}
           onClick={() => navigate("/bulletin")}
-          className="w-full rounded-[26px] border border-accent/30 bg-accent/10 p-4 text-left"
+          className="w-full rounded-[22px] border border-violet-400/20 bg-violet-500/5 p-4 text-left transition-colors hover:bg-violet-500/8"
         >
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex h-11 w-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
-              <Megaphone className="h-5 w-5" />
+            <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-violet-500/15 text-violet-500">
+              <Megaphone className="h-4.5 w-4.5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Mural em destaque</p>
-              <p className="mt-1 text-base font-semibold text-foreground">{pinnedNotice.title}</p>
-              <p className="mt-1 max-h-10 overflow-hidden text-sm text-muted-foreground">{pinnedNotice.content}</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                Mural em destaque
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {pinnedNotice.title}
+              </p>
+              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                {pinnedNotice.content}
+              </p>
             </div>
-            <ChevronRight className="mt-1 h-4 w-4 text-muted-foreground" />
+            <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
           </div>
         </motion.button>
-      ) : null}
+      )}
 
+      {/* Recent activity */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+        transition={{ delay: 0.17 }}
         className="space-y-3"
       >
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-base font-bold text-foreground">Pulso operacional</h2>
-            <p className="text-sm text-muted-foreground">
-              {areasQuery.data?.length ?? 0} áreas comuns cadastradas e {recentActivity.length} eventos recentes.
+            <h2 className="text-sm font-bold text-foreground">Atividade recente</h2>
+            <p className="text-xs text-muted-foreground">
+              {areasQuery.data?.length ?? 0} áreas comuns · {recentActivity.length} evento(s)
             </p>
           </div>
-          <Button variant="ghost" size="sm" className="rounded-full" onClick={() => navigate("/chat")}>
-            <MessageCircle className="h-4 w-4" />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-full px-3 text-xs"
+            onClick={() => navigate("/chat")}
+          >
+            <MessageCircle className="h-3.5 w-3.5" />
             Portaria
           </Button>
         </div>
@@ -304,20 +402,22 @@ const HomePage = () => {
           {recentActivity.map((item) => (
             <div
               key={item.id}
-              className="flex items-center gap-3 rounded-[20px] border border-border bg-card p-4 shadow-sm"
+              className="flex items-center gap-3 rounded-[18px] border border-border bg-card p-3.5 shadow-sm"
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-foreground">{item.title}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{item.when}</p>
+                <p className="truncate text-sm font-medium text-foreground">{item.title}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{item.when}</p>
               </div>
-              <Badge variant={item.variant}>{item.badge}</Badge>
+              <Badge variant={item.variant} className="shrink-0 text-[10px]">
+                {item.badge}
+              </Badge>
             </div>
           ))}
-          {recentActivity.length === 0 ? (
-            <div className="rounded-[20px] border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
-              Nenhuma atividade recente disponível no momento.
+          {recentActivity.length === 0 && (
+            <div className="rounded-[18px] border border-dashed border-border bg-card p-4 text-center text-xs text-muted-foreground">
+              Nenhuma atividade recente no momento.
             </div>
-          ) : null}
+          )}
         </div>
       </motion.div>
     </div>

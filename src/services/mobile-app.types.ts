@@ -14,9 +14,9 @@ export type VisitorStatus =
   | "CANCELLED"
   | "REJECTED";
 
-export type IncidentStatus = "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
-
-export type IncidentCategory = "SECURITY" | "MAINTENANCE" | "NOISE" | "OTHER";
+export type IncidentStatus = "OPEN" | "IN_PROGRESS" | "CLOSED";
+export type IncidentAttachmentKind = "IMAGE" | "VIDEO" | "AUDIO";
+export type BulletinTag = "URGENTE" | "NOTIFICACAO" | "AVISO";
 
 export type ReservationStatus =
   | "PENDING_APPROVAL"
@@ -24,6 +24,12 @@ export type ReservationStatus =
   | "REJECTED"
   | "CANCELLED"
   | "COMPLETED";
+
+export type DeliveryStatus =
+  | "ARRIVED"
+  | "OPERATOR_DELIVERED"
+  | "RESIDENT_CONFIRMED"
+  | "CONTESTED";
 
 export type PendingActionType =
   | "CREATE_VISITOR"
@@ -198,33 +204,138 @@ export interface VisitorModuleSettings {
   } | null;
 }
 
-export interface IncidentEntry {
+export interface IncidentTopic {
   id: number;
-  category: IncidentCategory;
-  title: string;
-  description: string;
-  status: IncidentStatus;
-  created_at: string;
-  person: {
+  site_id: number;
+  label: string;
+  description?: string | null;
+  active: boolean;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface IncidentModuleSettings {
+  id: number;
+  site_id: number;
+  enabled: boolean;
+  site?: {
     id: number;
     name: string;
-  };
+    tags?: string[];
+  } | null;
+  topics?: IncidentTopic[];
+}
+
+export interface IncidentParticipantOption {
+  id: number;
+  name: string;
+  photo_url?: string | null;
+  unit_label?: string | null;
+}
+
+export interface IncidentParticipant {
+  id: number;
+  kind: string;
+  role: string;
+  label: string;
+  unit_label?: string | null;
+  photo_url?: string | null;
+  is_me?: boolean;
+  created_at: string;
+}
+
+export interface IncidentAttachment {
+  kind?: IncidentAttachmentKind | null;
+  url?: string | null;
+  name?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+}
+
+export interface IncidentMessage {
+  id: number | string;
+  message_text?: string | null;
+  created_at: string;
+  sender_kind: string;
+  sender_label: string;
+  sender_role?: string | null;
+  is_me?: boolean;
+  attachment?: IncidentAttachment | null;
+}
+
+export interface IncidentEvent {
+  id: number;
+  event_type: string;
+  description?: string | null;
+  actor_kind: string;
+  actor_label?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface IncidentEntry {
+  id: number;
+  title: string;
+  description: string;
+  category: string;
+  status: IncidentStatus;
+  created_at: string;
+  updated_at?: string;
+  started_at?: string | null;
+  resolved_at?: string | null;
+  closed_at?: string | null;
+  last_message_at?: string | null;
+  resolution_time_minutes?: number | null;
+  topic?: IncidentTopic | null;
+  person?: {
+    id: number;
+    name: string;
+    unit_label?: string | null;
+  } | null;
   site?: {
     id: number;
     name: string;
   } | null;
+  participant_count?: number;
+  message_count?: number;
+  last_message_preview?: string | null;
+  solved_by?: {
+    label?: string | null;
+    kind?: string | null;
+  } | null;
+  participants?: IncidentParticipant[];
+  messages?: IncidentMessage[];
+  events?: IncidentEvent[];
   local_only?: boolean;
   pending_sync?: boolean;
 }
 
 export interface BulletinPost {
   id: number;
+  site_id?: number | null;
   title: string;
   content: string;
+  tag: BulletinTag;
+  image_url?: string | null;
   pinned: boolean;
   created_at: string;
   expires_at?: string | null;
-  category: "aviso" | "manutencao" | "evento" | "regra";
+  author_label?: string | null;
+  author_role?: string | null;
+  site?: {
+    id: number;
+    name: string;
+  } | null;
+}
+
+export interface CreateBulletinInput {
+  title: string;
+  content: string;
+  tag?: BulletinTag;
+  pinned?: boolean;
+  expires_at?: string;
+  image?: File | null;
 }
 
 export interface CommonArea {
@@ -293,30 +404,107 @@ export interface ReservationEntry {
 
 export interface DeliveryEntry {
   id: number;
+  site_id?: number;
+  target_scope?: "PERSON" | "APARTMENT";
   description: string;
-  carrier: string;
+  notes?: string | null;
   arrived_at: string;
-  location: string;
-  status: "waiting" | "collected";
+  status: DeliveryStatus;
+  delivered_at?: string | null;
+  delivered_to_name?: string | null;
+  contest_deadline_at?: string | null;
+  contest_reason?: string | null;
+  can_contest?: boolean;
+  target_unit_label?: string | null;
+  recipient_label?: string | null;
+  site?: {
+    id: number;
+    name: string;
+  } | null;
+  target_person?: {
+    id: number;
+    name: string;
+    unit_label?: string | null;
+  } | null;
+  resident_confirmed_by_person?: {
+    id: number;
+    name: string;
+  } | null;
+  contested_by_person?: {
+    id: number;
+    name: string;
+  } | null;
+}
+
+export interface DeliveryModuleSettings {
+  id: number;
+  site_id: number;
+  enabled: boolean;
+  site?: {
+    id: number;
+    name: string;
+  } | null;
+}
+
+export type ChatThreadType = "PORTARIA" | "DIRECT" | "GROUP";
+export type ChatThreadStatus = "ACTIVE" | "PENDING_APPROVAL" | "CLOSED";
+
+export interface ChatModuleSettings {
+  id: number;
+  site_id: number;
+  enabled: boolean;
+  allow_portaria_chat: boolean;
+  allow_direct_messages: boolean;
+  allow_group_creation: boolean;
+  require_direct_message_approval: boolean;
+  site?: {
+    id: number;
+    name: string;
+  } | null;
+}
+
+export interface ChatContact {
+  person_id: number;
+  name: string;
+  unit_label?: string | null;
+  avatar_label: string;
 }
 
 export interface ChatMessage {
-  id: string;
+  id: number | string;
   text: string;
-  sender: "me" | "other";
-  time: string;
+  created_at: string;
+  sender_kind: string;
+  sender_label: string;
+  sender_avatar_label: string;
+  sender_role?: string | null;
+  is_me: boolean;
 }
 
 export interface ChatThread {
-  id: string;
-  name: string;
-  role: string;
-  last_message: string;
-  time: string;
-  unread: number;
-  avatar: string;
-  online: boolean;
-  messages: ChatMessage[];
+  id: number;
+  type: ChatThreadType;
+  status: ChatThreadStatus;
+  site_id: number;
+  site_name?: string | null;
+  title: string;
+  counterpart_label: string;
+  counterpart_unit_label?: string | null;
+  counterpart_avatar_label: string;
+  last_message_preview: string;
+  last_message_at?: string | null;
+  last_sender_label?: string | null;
+  unread_count: number;
+  requires_my_approval: boolean;
+  can_reply: boolean;
+  can_block: boolean;
+  can_approve: boolean;
+  can_reject: boolean;
+  blocked_by_me: boolean;
+  pending_other_approval: boolean;
+  allow_portaria_chat?: boolean;
+  allow_group_creation?: boolean;
+  messages?: ChatMessage[];
 }
 
 export interface PendingAction {
@@ -349,7 +537,13 @@ export interface CreateVisitorInput {
 export interface CreateIncidentInput {
   title: string;
   description: string;
-  category: IncidentCategory;
+  topic_id: number;
+  attachment?: File | null;
+}
+
+export interface SendIncidentMessageInput {
+  message_text?: string;
+  attachment?: File | null;
 }
 
 export interface CreateReservationInput {

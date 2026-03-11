@@ -22,11 +22,16 @@ import {
   readPreviewState,
   readSessionSnapshot,
   registerResidentAppSession,
+  unregisterResidentPushSubscription,
   revokeResidentAppSession,
   saveSessionSnapshot,
   switchResidentBackendContext,
   syncPendingActions,
 } from "@/services/mobile-app.service";
+import {
+  clearStoredPushRegistration,
+  readStoredPushEndpoint,
+} from "@/lib/web-push";
 import type {
   ConnectionState,
   ResidentDeviceSession,
@@ -269,6 +274,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   function switchMode(mode: SessionMode) {
     if (mode === "preview") {
+      const endpoint = readStoredPushEndpoint();
+      if (endpoint && snapshot.mode === "backend") {
+        void unregisterResidentPushSubscription(snapshot, endpoint).catch(
+          () => undefined,
+        );
+      }
+      clearStoredPushRegistration();
       disconnectBackendSession();
       const next = {
         ...readSessionSnapshot(),
@@ -393,6 +405,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   function disconnectBackend() {
+    const endpoint = readStoredPushEndpoint();
+    if (endpoint && snapshot.mode === "backend") {
+      void unregisterResidentPushSubscription(snapshot, endpoint).catch(
+        () => undefined,
+      );
+    }
+    clearStoredPushRegistration();
     const next = buildLoggedOutBackendSnapshot(snapshot);
     setSnapshot(next);
     saveSessionSnapshot(next);

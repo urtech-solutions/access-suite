@@ -1,5 +1,5 @@
 # =============================================================================
-# Security Vision Access — Mobile App Runtime (React + Vite)
+# AccessOS — Mobile App Runtime (React + Vite)
 # =============================================================================
 # Este Dockerfile suporta dois cenários:
 #

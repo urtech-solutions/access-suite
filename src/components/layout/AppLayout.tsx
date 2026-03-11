@@ -7,23 +7,42 @@ import {
   Users,
 } from "lucide-react";
 
+import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
 import { cn } from "@/lib/utils";
 
 const tabs = [
   { path: "/", icon: Home, label: "Início", exact: true },
   { path: "/visitors", icon: Users, label: "Visitantes", exact: false },
-  { path: "/common-areas", icon: CalendarClock, label: "Reservas", exact: false },
-  { path: "/incidents", icon: AlertTriangle, label: "Incidentes", exact: false },
+  {
+    path: "/common-areas",
+    icon: CalendarClock,
+    label: "Reservas",
+    exact: false,
+  },
+  {
+    path: "/incidents",
+    icon: AlertTriangle,
+    label: "Incidentes",
+    exact: false,
+  },
   { path: "/chat", icon: MessageCircle, label: "Chat", exact: false },
 ];
 
 const AppLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { attentionCounts } = useResidentNotificationCenter();
 
   function isTabActive(tab: (typeof tabs)[number]) {
     if (tab.exact) return location.pathname === tab.path;
     return location.pathname.startsWith(tab.path);
+  }
+
+  function resolveTabBadge(path: string) {
+    if (path === "/visitors") return attentionCounts.visitors;
+    if (path === "/incidents") return attentionCounts.incidents;
+    if (path === "/chat") return attentionCounts.chat;
+    return 0;
   }
 
   return (
@@ -47,16 +66,32 @@ const AppLayout = () => {
                   key={tab.path}
                   onClick={() => navigate(tab.path)}
                   className={cn(
-                    "flex flex-col items-center gap-1 rounded-[20px] px-1 py-2.5 transition-all duration-200",
+                    "relative flex flex-col items-center gap-1 rounded-[20px] px-1 py-2.5 transition-all duration-200",
                     active
                       ? "bg-primary text-primary-foreground shadow-md shadow-primary/20"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
+                  {resolveTabBadge(tab.path) > 0 ? (
+                    <span
+                      className={cn(
+                        "absolute right-2 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold",
+                        active
+                          ? "bg-primary-foreground text-primary"
+                          : "bg-primary text-primary-foreground",
+                      )}
+                    >
+                      {resolveTabBadge(tab.path) > 9
+                        ? "9+"
+                        : resolveTabBadge(tab.path)}
+                    </span>
+                  ) : null}
                   <tab.icon
                     className={cn(
                       "transition-all duration-200",
-                      active ? "h-[18px] w-[18px] scale-110" : "h-[18px] w-[18px]",
+                      active
+                        ? "h-[18px] w-[18px] scale-110"
+                        : "h-[18px] w-[18px]",
                     )}
                     strokeWidth={active ? 2.5 : 2}
                   />

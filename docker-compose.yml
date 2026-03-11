@@ -1,5 +1,5 @@
 # =============================================================================
-# Security Vision Access — Runtime Mobile em Docker
+# AccessOS — Runtime Mobile em Docker
 # =============================================================================
 # Padrao:
 #   docker compose up -d --build
@@ -17,7 +17,7 @@
 
 services:
   access_app:
-    container_name: security_vision_access_app
+    container_name: aos_access_app
     build:
       context: .
       dockerfile: Dockerfile
@@ -25,7 +25,7 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_APP_MODE: ${VITE_APP_MODE:-backend}
-    image: security-vision/access-suite:runtime
+    image: accessos/access-suite:runtime
     restart: unless-stopped
     ports:
       - '${ACCESS_SUITE_PORT:-8088}:80'
@@ -37,12 +37,12 @@ services:
       retries: 3
 
   access_dev:
-    container_name: security_vision_access_dev
+    container_name: aos_access_dev
     build:
       context: .
       dockerfile: Dockerfile
       target: dev
-    image: security-vision/access-suite:dev
+    image: accessos/access-suite:dev
     restart: unless-stopped
     profiles: ['dev']
     environment:

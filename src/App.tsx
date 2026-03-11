@@ -8,6 +8,9 @@ import {
 } from "react-router-dom";
 
 import AppLayout from "@/components/layout/AppLayout";
+import { ResidentNotificationsBridge } from "@/features/notifications/ResidentNotificationsBridge";
+import { ResidentWebPushBridge } from "@/features/notifications/ResidentWebPushBridge";
+import { ResidentRealtimeBridge } from "@/features/realtime/ResidentRealtimeBridge";
 import { useSession } from "@/features/session/SessionProvider";
 import { AppProviders } from "@/providers/AppProviders";
 
@@ -55,7 +58,14 @@ const ProtectedShell = () => {
     return <Navigate to="/auth" replace state={{ from: location }} />;
   }
 
-  return <AppLayout />;
+  return (
+    <>
+      <ResidentRealtimeBridge />
+      <ResidentNotificationsBridge />
+      <ResidentWebPushBridge />
+      <AppLayout />
+    </>
+  );
 };
 
 const App = () => (

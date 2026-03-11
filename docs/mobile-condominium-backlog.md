@@ -16,8 +16,13 @@ Organizar o fechamento da visao de condominios do app mobile em um backlog incre
 - login do morador por `CPF + senha` ja existe;
 - primeiro acesso ja diferencia `register` e `login`;
 - ha suporte inicial a multi-contexto por `CPF` entre sites e tenants;
-- o app ja consome backend real para `visitors`, `incidents`, `bulletin`, `common-areas` e `reservations`;
-- a troca de residencia/contexto ja existe no app, mas ainda precisa endurecimento de UX, seguranca de sessao e regras operacionais.
+- o app ja consome backend real para `visitors`, `incidents`, `bulletin`, `common-areas`, `reservations`, `deliveries` e `chat`;
+- o `Management` ja governa configuracoes de condominio para `areas comuns`, `entregas`, `chat` e `incidentes`;
+- o `PWA-reviewed` ja participa dos fluxos de `entregas`, `chat`, `incidentes` e operacao condominial;
+- a troca de residencia/contexto ja existe no app e a base de sessao esta funcional;
+- `realtime` ja esta ligado para `chat`, `entregas`, `visitantes`, `incidentes` e `mural`;
+- a inbox unificada e os badges ja existem no app e no `PWA-reviewed`;
+- a fundacao de `web push` ja foi implementada, restando ativacao sob `HTTPS` no ambiente publicado.
 
 ## Fechado Ate Aqui
 
@@ -42,6 +47,30 @@ Organizar o fechamento da visao de condominios do app mobile em um backlog incre
   - aprovacao no `Management`;
   - link unico para convidados;
   - endurecimento de conflito, lotacao e janela operacional.
+- `DEL`
+  - modulo de entregas habilitavel por site;
+  - criacao por apartamento ou morador no `PWA-reviewed`;
+  - confirmacao e contestacao no app;
+  - trilha operacional base e sincronizacao com contexto do condominio.
+- `BUL`
+  - mural de comunicados por site;
+  - criacao por sindico no app;
+  - criacao por operacao no `PWA-reviewed`;
+  - suporte a texto, imagem, tag e expiracao.
+- `INC`
+  - modulo de incidentes habilitavel por site;
+  - topicos configuraveis no `Management`;
+  - abertura pelo morador com timeline conversacional;
+  - operacao no `PWA-reviewed` e acompanhamento pelo sindico.
+- `CHAT`
+  - chat textual base no app;
+  - canal com portaria e regras por site;
+  - primeira mensagem com aprovacao e bloqueio entre moradores;
+  - widget operacional no `PWA-reviewed`.
+- `RT`
+  - realtime ja integrado em `chat`, `entregas`, `visitantes`, `incidentes` e `mural`;
+  - inbox unificada e badges por modulo;
+  - base de `web push` com persistencia de subscription e `service worker`.
 
 ## Meta De Saida Da Visao Condominio
 
@@ -65,21 +94,107 @@ Consideraremos a visao de condominios pronta quando:
 - `AUTH` Identidade e Sessao base
 - `VIS` Visitantes base
 - `AREAS` Areas Comuns base
+- `DEL` Entregas base
+- `BUL` Mural base
+- `INC` Incidentes base
+- `CHAT` Chat textual base
 
 ### Now
 
-- `DEL` Encomendas
-- `CHAT` Chat textual com imagens e audios
+- `DEPLOY-01` endurecimento do primeiro deploy
+- `HTTPS` para ativacao de push real
+- QA de regressao dos modulos ja entregues
+- endurecimento de `VIS`
+- endurecimento de `AREAS`
+- endurecimento de `DEL`
+- endurecimento de `INC`
+- endurecimento de `CHAT`
 
 ### Next
 
-- `RT` Realtime e notificacoes push
 - `VOICE` chamadas de voz
+- fechamento de midia rica no chat e nos incidentes
 
 ### Later
 
 - `VIDEO` chamadas de video
 - `PKG` empacotamento mobile, push e recursos nativos
+
+## Corte De Deploy 1
+
+### Deploy 1 - Escopo funcional publicado
+
+**Objetivo**
+
+Publicar em ambiente controlado tudo o que ja foi implementado e integrado, sem abrir novos modulos antes de estabilizar a base.
+
+**Inclui**
+
+- `AUTH`
+- `VIS`
+- `AREAS`
+- `DEL`
+- `BUL`
+- `INC`
+- `CHAT`
+- `RT`
+- inbox e badges
+- fundacao de `web push`
+
+**Nao inclui como bloqueador**
+
+- grupos de chat;
+- anexos ricos completos em `chat` e `incidentes`;
+- audio gravado;
+- `voz`;
+- `video`;
+- `Capacitor` e stores nativas.
+
+### DEPLOY-01 - Itens obrigatorios antes de publicar
+
+**Objetivo**
+
+Fechar o que falta para a primeira publicacao operacional dos modulos ja construidos.
+
+**Referencia operacional**
+
+- `docs/deploy-1-qa-readiness.md`
+
+**Tarefas**
+
+- infraestrutura:
+  - publicar `access-suite` e `PWA-reviewed` sob `HTTPS`;
+  - validar `CORS`, `EVENT_PUBLIC_BASE_URL` e URL publica dos links;
+  - garantir backup do banco e procedimento de rollback;
+- backend:
+  - validar migrations aplicadas no ambiente alvo;
+  - revisar healthchecks, logs de erro e subscriptions de push;
+- management:
+  - revisar as configuracoes obrigatorias por site:
+    - modulos habilitados;
+    - perfis default;
+    - topicos;
+    - regras de chat;
+    - regras de convites;
+    - locations de areas comuns;
+- QA:
+  - executar matriz de testes por perfil e por modulo;
+  - validar cenarios online, queda de conexao e recuperacao;
+  - validar rotas principais e erros esperados;
+- operacao:
+  - definir condominio piloto;
+  - definir usuarios piloto:
+    - morador
+    - sindico
+    - porteiro
+    - administrador
+
+**Pronto quando**
+
+- os modulos entregues estiverem operando em ambiente HTTPS;
+- o push web conseguir registrar subscription real;
+- o fluxo critico de cada perfil estiver validado ponta a ponta;
+- houver checklist de configuracao e rollback do ambiente.
 
 ## Epic AUTH - Identidade E Sessao
 
@@ -403,44 +518,43 @@ Fechar a comunicacao do morador sobre o estado do visitante.
 
 - o morador souber o que aconteceu com o visitante sem precisar consultar a portaria.
 
-## Backlog Resumido Das Demais Trilhas
+## Estado Atual Das Trilhas Complementares
 
 ### BUL - Mural E Notificacoes
 
-- segmentacao por tenant/site/bloco/perfil;
-- leitura e nao lidas;
-- push em trilha posterior.
+- base funcional entregue no app e no `PWA-reviewed`;
+- criacao por sindico e operacao ja disponivel;
+- eventos realtime e inbox ja estao ligados;
+- ainda falta endurecer segmentacao fina e leitura/nao lidas canonicamente.
 
 ### INC - Incidentes E Chamados
 
-- abertura em formato conversacional;
-- anexos, audio, prioridade e status;
-- roteamento por perfil operacional.
+- base funcional entregue com topicos, status, participantes e timeline;
+- inbox e realtime ja estao ligados;
+- ainda falta endurecer anexos ricos, SLA e indicadores operacionais;
+- precisa consolidar auditoria analitica de tempo de resolucao, tipo e responsavel.
 
 ### DEL - Encomendas
 
-- cadastro da encomenda por operacao/portaria;
-- notificacao ao morador;
-- lista de pendentes e retiradas;
-- confirmacao de retirada;
-- historico auditavel por unidade e por site;
-- permissao de consulta para sindico conforme contexto.
+- base funcional entregue para criacao, confirmacao e contestacao;
+- inbox e realtime ja estao ligados;
+- ainda falta endurecer auditoria visivel e UX operacional;
+- a evolucao posterior deve preparar o gancho para incidentes quando houver contestacao nao resolvida.
 
 ### CHAT - Chat Condominial
 
-- conversas `1:1` e grupos;
-- regras de visibilidade e criacao vindas do `Management`;
-- anexos de imagem e arquivo;
-- audio gravado no chat;
-- unread, mute e moderacao basica;
-- portaria, moradores, sindico e zeladoria no mesmo contrato.
+- base textual entregue com regras por site e operacao no `PWA-reviewed`;
+- realtime, inbox e badge ja estao ligados;
+- ainda falta abrir grupos, unread canonicamente, moderacao operacional e politicas de bloqueio mais maduras;
+- anexos, imagens, audio gravado e tempo real entram como trilha imediata de endurecimento.
 
 ### RT - Realtime E Notificacoes
 
-- `WebSocket` ou `SSE` para chat, entregas e avisos;
-- push notifications por contexto ativo;
-- badges, central de notificacoes e links internos;
-- eventos tecnicos e operacionais observaveis.
+- `WebSocket` ja ligado para `chat`, `entregas`, `visitantes`, `incidentes` e `mural`;
+- inbox, badges e links internos ja entregues;
+- `web push` ja tem backend, subscriptions persistidas e `service worker`;
+- falta ativar `HTTPS` no ambiente publicado e validar subscription real no dispositivo;
+- depois disso, a trilha segue para notificacao mais madura e nativa.
 
 ### VOICE - Chamadas De Voz
 
@@ -470,48 +584,53 @@ Fechar a comunicacao do morador sobre o estado do visitante.
 
 ### Onda 1
 
+- `DEPLOY-01`
 - endurecimento final de `VIS`
 - endurecimento final de `AREAS`
+- endurecimento final de `DEL`
+- endurecimento final de `INC`
+- endurecimento final de `CHAT`
 
 ### Onda 2
 
-- `DEL`
+- consolidacao de `RT` sob `HTTPS`
+- push notifications em ambiente publicado
+- unread e eventos ao vivo entre app e operacao
 
 ### Onda 3
 
-- `CHAT` textual
 - imagens e anexos
 - audio gravado
+- politicas de midia, retencao e upload seguro
 
 ### Onda 4
 
-- `RT`
-- inbox/push
+- `VOICE`
 
 ### Onda 5
 
-- `VOICE`
+- `VIDEO`
 
 ### Onda 6
 
-- `VIDEO`
 - `PKG`
 
 ## Definicao De Pronto Da Proxima Fase
 
 A proxima fase estara fechada quando:
 
-- o modulo de `Entregas` estiver ponta a ponta;
-- o morador receber aviso, consultar e confirmar retirada;
-- o `Management` e a operacao enxergarem o mesmo estado da encomenda;
-- houver trilha minima de auditoria por unidade e por site.
+- `chat`, `entregas`, `mural` e `incidentes` reagirem a eventos reais sem refresh manual;
+- o app tiver notificacoes internas consistentes por contexto ativo;
+- o ambiente HTTPS estiver habilitado para registrar `web push` real;
+- a camada de sincronizacao estiver pronta para receber push nativo depois;
+- os modulos base de condominio estiverem rastreaveis em auditoria e UX operacional madura.
 
 ## Proxima Acao Sugerida
 
-Iniciar por `DEL-01` com este corte tecnico:
+Iniciar por `DEPLOY-01` com este corte tecnico:
 
-1. modelar `deliveries` no backend com status canonicos;
-2. expor tela e regras basicas no `Management`;
-3. ligar o app do morador a lista de pendentes/retiradas;
-4. publicar notificacao local do recebimento;
-5. fechar confirmacao de retirada com auditoria.
+1. publicar `access-suite` e `PWA-reviewed` em `HTTPS`;
+2. validar `web push` real no dispositivo;
+3. executar QA de regressao do escopo do `Deploy 1`;
+4. corrigir endurecimentos finais dos modulos ja entregues;
+5. publicar o primeiro ambiente controlado.

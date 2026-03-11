@@ -264,7 +264,7 @@ const VisitorsPage = () => {
 
   function buildShareText(visitor: VisitorEntry) {
     if (visitor.public_link) {
-      return `Seu link de convite Security Vision: ${visitor.public_link}`;
+      return `Seu link de convite AccessOS: ${visitor.public_link}`;
     }
 
     return `Convite ${visitor.guest_name}`;

@@ -1,34 +1,30 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   AlertTriangle,
   BellRing,
   Check,
+  Clock3,
   ChevronRight,
+  Megaphone,
+  MessageCircle,
+  Package,
   ShieldAlert,
   UserCheck,
   XCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/features/shared/PageHeader";
-import { useSession } from "@/features/session/SessionProvider";
 import {
-  deriveResidentNotifications,
   formatVisitorAccessReason,
-  markNotificationsAsRead,
-  readNotificationReadMap,
-  type ResidentNotificationScope,
   type ResidentNotification,
 } from "@/features/notifications/resident-notifications";
-import {
-  approveVisitor,
-  listVisitors,
-  rejectVisitor,
-} from "@/services/mobile-app.service";
+import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
+import { approveVisitor, rejectVisitor } from "@/services/mobile-app.service";
 
 function formatWhen(value: string) {
   return new Date(value).toLocaleString("pt-BR", {
@@ -43,6 +39,18 @@ function notificationIcon(notification: ResidentNotification) {
       return ShieldAlert;
     case "VISITOR_ACCESS_USED":
       return UserCheck;
+    case "DELIVERY_ARRIVED":
+    case "DELIVERY_OPERATOR_DELIVERED":
+      return Package;
+    case "INCIDENT_IN_PROGRESS":
+      return Clock3;
+    case "INCIDENT_CLOSED":
+      return Check;
+    case "BULLETIN_POSTED":
+      return Megaphone;
+    case "CHAT_PENDING_APPROVAL":
+    case "CHAT_UNREAD":
+      return MessageCircle;
     default:
       return AlertTriangle;
   }
@@ -55,64 +63,37 @@ function notificationToneClasses(notification: ResidentNotification) {
   if (notification.tone === "warning") {
     return "border-warning/20 bg-warning/10 text-warning";
   }
+  if (notification.tone === "destructive") {
+    return "border-destructive/20 bg-destructive/10 text-destructive";
+  }
   return "border-info/20 bg-info/10 text-info";
 }
 
 const NotificationsPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { resident, snapshot, connectionState } = useSession();
-  const notificationScope = useMemo<ResidentNotificationScope>(
-    () => ({
-      context_id: resident.context_id,
-      profile_type: resident.profile_type,
-      role: resident.role,
-      site_id: resident.site_id,
-      tenant_uuid: resident.tenant_uuid,
-    }),
-    [
-      resident.context_id,
-      resident.profile_type,
-      resident.role,
-      resident.site_id,
-      resident.tenant_uuid,
-    ],
-  );
-  const [readMap, setReadMap] = useState(() =>
-    readNotificationReadMap(notificationScope),
-  );
-
-  useEffect(() => {
-    setReadMap(readNotificationReadMap(notificationScope));
-  }, [notificationScope]);
-
-  const visitorsQuery = useQuery({
-    queryKey: ["visitors", resident.id, snapshot.mode, connectionState],
-    queryFn: () => listVisitors(snapshot, connectionState, resident),
-  });
-
-  const notifications = useMemo(
-    () => deriveResidentNotifications(resident, visitorsQuery.data ?? []),
-    [resident, visitorsQuery.data],
-  );
-
-  const unreadCount = useMemo(
-    () => notifications.filter((notification) => !readMap[notification.id]).length,
-    [notifications, readMap],
-  );
+  const {
+    resident,
+    snapshot,
+    connectionState,
+    notifications,
+    readMap,
+    unreadCount,
+    unreadByModule,
+    markAsRead,
+  } = useResidentNotificationCenter();
 
   const pendingApprovalCount = notifications.filter(
     (notification) => notification.kind === "VISITOR_PENDING_APPROVAL",
   ).length;
 
-  const operationalCount = notifications.filter(
-    (notification) => notification.kind !== "VISITOR_PENDING_APPROVAL",
-  ).length;
-
-  function refreshReadState(notificationIds: string[]) {
-    markNotificationsAsRead(notificationScope, notificationIds);
-    setReadMap(readNotificationReadMap(notificationScope));
-  }
+  const operationalCount = useMemo(
+    () =>
+      notifications.filter(
+        (notification) => notification.kind !== "VISITOR_PENDING_APPROVAL",
+      ).length,
+    [notifications],
+  );
 
   const approveMutation = useMutation({
     mutationFn: async ({
@@ -123,12 +104,16 @@ const NotificationsPage = () => {
       notificationId: string;
     }) => approveVisitor(snapshot, connectionState, resident, visitorId),
     onSuccess: async (_updated, variables) => {
-      refreshReadState([variables.notificationId]);
-      await queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
+      markAsRead([variables.notificationId]);
+      await queryClient.invalidateQueries({
+        queryKey: ["visitors", resident.id],
+      });
       toast.success("Convidado aprovado e liberado.");
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Não foi possível aprovar.");
+      toast.error(
+        error instanceof Error ? error.message : "Não foi possível aprovar.",
+      );
     },
   });
 
@@ -141,12 +126,16 @@ const NotificationsPage = () => {
       notificationId: string;
     }) => rejectVisitor(snapshot, connectionState, resident, visitorId),
     onSuccess: async (_updated, variables) => {
-      refreshReadState([variables.notificationId]);
-      await queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
+      markAsRead([variables.notificationId]);
+      await queryClient.invalidateQueries({
+        queryKey: ["visitors", resident.id],
+      });
       toast.success("Cadastro rejeitado.");
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Não foi possível rejeitar.");
+      toast.error(
+        error instanceof Error ? error.message : "Não foi possível rejeitar.",
+      );
     },
   });
 
@@ -154,7 +143,7 @@ const NotificationsPage = () => {
     <div className="space-y-6 px-4 pb-6 pt-8">
       <PageHeader
         title="Notificações"
-        subtitle="Pendências de aprovação do morador e retorno operacional dos convites."
+        subtitle="Inbox unificada de visitantes, entregas, incidentes, mural e chat."
         backTo="/"
       />
 
@@ -189,7 +178,7 @@ const NotificationsPage = () => {
             <Button
               variant="outline"
               className="rounded-full"
-              onClick={() => refreshReadState(notifications.map((item) => item.id))}
+              onClick={() => markAsRead(notifications.map((item) => item.id))}
             >
               <BellRing className="h-4 w-4" />
               Marcar tudo como lido
@@ -236,11 +225,16 @@ const NotificationsPage = () => {
 
                   <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <span>{formatWhen(notification.created_at)}</span>
-                    {notification.site_name ? <span>• {notification.site_name}</span> : null}
-                    {notification.unit_label ? <span>• {notification.unit_label}</span> : null}
+                    {notification.site_name ? (
+                      <span>• {notification.site_name}</span>
+                    ) : null}
+                    {notification.unit_label ? (
+                      <span>• {notification.unit_label}</span>
+                    ) : null}
                   </div>
 
-                  {notification.event && notification.kind !== "VISITOR_PENDING_APPROVAL" ? (
+                  {notification.event &&
+                  notification.kind !== "VISITOR_PENDING_APPROVAL" ? (
                     <div className="mt-3 rounded-[18px] bg-muted px-3 py-2 text-sm text-muted-foreground">
                       {formatVisitorAccessReason(notification.event.reason)}
                     </div>
@@ -283,8 +277,8 @@ const NotificationsPage = () => {
                         variant="ghost"
                         className="rounded-full"
                         onClick={() => {
-                          refreshReadState([notification.id]);
-                          navigate("/visitors");
+                          markAsRead([notification.id]);
+                          navigate(notification.target_path);
                         }}
                       >
                         {notification.action_label}
@@ -304,6 +298,29 @@ const NotificationsPage = () => {
           </div>
         ) : null}
       </div>
+
+      {notifications.length > 0 ? (
+        <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
+          <p className="text-sm font-semibold text-foreground">
+            Distribuição por módulo
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Badge variant="secondary">
+              Visitantes {unreadByModule.VISITORS ?? 0}
+            </Badge>
+            <Badge variant="secondary">
+              Entregas {unreadByModule.DELIVERIES ?? 0}
+            </Badge>
+            <Badge variant="secondary">
+              Incidentes {unreadByModule.INCIDENTS ?? 0}
+            </Badge>
+            <Badge variant="secondary">
+              Mural {unreadByModule.BULLETIN ?? 0}
+            </Badge>
+            <Badge variant="secondary">Chat {unreadByModule.CHAT ?? 0}</Badge>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

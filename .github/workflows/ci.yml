@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  app:
+    name: Access App — test / build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_URL: /api
+          VITE_APP_MODE: backend
+
+  docker-build:
+    name: Docker build (CI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime
+          push: false
+          tags: security-vision/access-app:ci-${{ github.sha }}
+          cache-from: type=gha,scope=ci-access-app
+          cache-to: type=gha,mode=max,scope=ci-access-app
+          build-args: |
+            VITE_API_URL=/api
+            VITE_APP_MODE=backend

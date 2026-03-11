@@ -78,6 +78,19 @@ type ResidentAppResetResponse = {
   success: boolean;
 };
 
+type PushConfigResponse = {
+  enabled: boolean;
+  public_key?: string | null;
+  subject?: string | null;
+};
+
+type SavePushSubscriptionInput = {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  expiration_time?: number | null;
+};
+
 export function normalizeApiBaseUrl(baseUrl?: string) {
   const fallback = String(DEFAULT_API_BASE_URL ?? "http://localhost:3000")
     .trim()
@@ -776,6 +789,49 @@ export async function revokeResidentAppSession(
       method: "POST",
     },
   );
+}
+
+export async function getResidentWebPushConfig(baseUrl?: string) {
+  return requestJson<PushConfigResponse>("/push/config", {
+    baseUrl,
+  });
+}
+
+export async function registerResidentPushSubscription(
+  snapshot: SessionSnapshot,
+  payload: SavePushSubscriptionInput,
+) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão backend não autenticada.");
+  }
+
+  const deviceInfo = getResidentDeviceInfo();
+  return requestJson<{ success: boolean }>("/push/resident/subscribe", {
+    baseUrl: snapshot.apiBaseUrl,
+    token: snapshot.token,
+    method: "POST",
+    body: {
+      ...payload,
+      device_name: deviceInfo.device_name,
+      device_platform: deviceInfo.device_platform,
+    },
+  });
+}
+
+export async function unregisterResidentPushSubscription(
+  snapshot: SessionSnapshot,
+  endpoint: string,
+) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid || !endpoint) {
+    return { success: true };
+  }
+
+  return requestJson<{ success: boolean }>("/push/resident/unsubscribe", {
+    baseUrl: snapshot.apiBaseUrl,
+    token: snapshot.token,
+    method: "POST",
+    body: { endpoint },
+  });
 }
 
 export async function loadBackendResidents(snapshot: SessionSnapshot) {

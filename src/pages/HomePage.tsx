@@ -12,18 +12,20 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  countUnreadResidentNotifications,
-  deriveResidentNotifications,
-} from "@/features/notifications/resident-notifications";
+import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
 import { ResidenceContextToggle } from "@/features/session/ActiveResidenceSwitcher";
 import { ConnectivityPill } from "@/features/shared/ConnectivityPill";
 import { useSession } from "@/features/session/SessionProvider";
+import {
+  getBrowserNotificationPermission,
+  requestBrowserNotificationPermission,
+  type BrowserNotificationPermissionState,
+} from "@/lib/browser-notifications";
 import {
   getDeliverySettings,
   listBulletin,
@@ -53,6 +55,11 @@ function resolveGreeting() {
 const HomePage = () => {
   const navigate = useNavigate();
   const { resident, snapshot, connectionState } = useSession();
+  const { attentionCounts, unreadCount } = useResidentNotificationCenter();
+  const [notificationPermission, setNotificationPermission] =
+    useState<BrowserNotificationPermissionState>(
+      getBrowserNotificationPermission(),
+    );
 
   const visitorsQuery = useQuery({
     queryKey: ["visitors", resident.id, snapshot.mode, connectionState],
@@ -80,7 +87,12 @@ const HomePage = () => {
   });
 
   const deliverySettingsQuery = useQuery({
-    queryKey: ["deliveries-settings", resident.site_id, snapshot.mode, connectionState],
+    queryKey: [
+      "deliveries-settings",
+      resident.site_id,
+      snapshot.mode,
+      connectionState,
+    ],
     queryFn: () => getDeliverySettings(snapshot, connectionState),
   });
 
@@ -91,7 +103,8 @@ const HomePage = () => {
   });
 
   const deliveryEnabled =
-    resident.role === "MORADOR" && deliverySettingsQuery.data?.enabled !== false;
+    resident.role === "MORADOR" &&
+    deliverySettingsQuery.data?.enabled !== false;
 
   const quickActions = [
     {
@@ -100,6 +113,7 @@ const HomePage = () => {
       path: "/visitors",
       tone: "bg-blue-500/10 text-blue-500",
       description: "Convites e acessos",
+      badgeCount: attentionCounts.visitors,
     },
     {
       icon: CalendarClock,
@@ -107,6 +121,7 @@ const HomePage = () => {
       path: "/common-areas",
       tone: "bg-emerald-500/10 text-emerald-500",
       description: "Reservar espaços",
+      badgeCount: 0,
     },
     ...(deliveryEnabled
       ? [
@@ -116,6 +131,7 @@ const HomePage = () => {
             path: "/deliveries",
             tone: "bg-amber-500/10 text-amber-500",
             description: "Na portaria",
+            badgeCount: attentionCounts.deliveries,
           },
         ]
       : []),
@@ -125,6 +141,7 @@ const HomePage = () => {
       path: "/incidents",
       tone: "bg-red-500/10 text-red-500",
       description: "Reportar problemas",
+      badgeCount: attentionCounts.incidents,
     },
     {
       icon: Megaphone,
@@ -132,6 +149,7 @@ const HomePage = () => {
       path: "/bulletin",
       tone: "bg-violet-500/10 text-violet-500",
       description: "Avisos e notícias",
+      badgeCount: attentionCounts.bulletin,
     },
     {
       icon: UserRound,
@@ -139,6 +157,7 @@ const HomePage = () => {
       path: "/profile",
       tone: "bg-slate-500/10 text-slate-500",
       description: "Conta e sessão",
+      badgeCount: 0,
     },
   ];
 
@@ -151,27 +170,38 @@ const HomePage = () => {
     reservationsQuery.data?.filter(
       (item) => item.person.id === resident.id && item.status === "CONFIRMED",
     ).length ?? 0;
-  const waitingDeliveries = deliveries.filter((item) => item.status === "ARRIVED").length;
+  const waitingDeliveries = deliveries.filter(
+    (item) => item.status === "ARRIVED",
+  ).length;
   const openIncidents =
     incidentsQuery.data?.filter(
       (item) => item.status === "OPEN" || item.status === "IN_PROGRESS",
     ).length ?? 0;
   const pinnedNotice =
     bulletinQuery.data?.find((item) => item.pinned) ?? bulletinQuery.data?.[0];
-  const residentNotifications = useMemo(
-    () => deriveResidentNotifications(resident, visitorsQuery.data ?? []),
-    [resident, visitorsQuery.data],
+  const unreadNotificationCount = unreadCount;
+  const pendingApprovalCount = attentionCounts.visitors;
+  const monitoringCount = Math.max(
+    unreadNotificationCount - pendingApprovalCount,
+    0,
   );
-  const unreadNotificationCount = useMemo(
-    () => countUnreadResidentNotifications(resident, residentNotifications),
-    [resident, residentNotifications],
-  );
-  const pendingApprovalCount = residentNotifications.filter(
-    (notification) => notification.kind === "VISITOR_PENDING_APPROVAL",
-  ).length;
-  const monitoringCount = residentNotifications.filter(
-    (notification) => notification.kind !== "VISITOR_PENDING_APPROVAL",
-  ).length;
+
+  useEffect(() => {
+    const syncPermission = () =>
+      setNotificationPermission(getBrowserNotificationPermission());
+    syncPermission();
+    window.addEventListener("focus", syncPermission);
+    document.addEventListener("visibilitychange", syncPermission);
+    return () => {
+      window.removeEventListener("focus", syncPermission);
+      document.removeEventListener("visibilitychange", syncPermission);
+    };
+  }, []);
+
+  async function handleNotificationPermission() {
+    const nextPermission = await requestBrowserNotificationPermission();
+    setNotificationPermission(nextPermission);
+  }
 
   const recentActivity = [
     ...(visitorsQuery.data ?? []).slice(0, 2).map((visitor) => ({
@@ -195,10 +225,30 @@ const HomePage = () => {
   ].slice(0, 4);
 
   const stats = [
-    { label: "Convites ativos", value: visitorCount, icon: Users, tone: "text-blue-500" },
-    { label: "Reservas confirmadas", value: reservationCount, icon: CalendarClock, tone: "text-emerald-500" },
-    { label: "Entregas na portaria", value: waitingDeliveries, icon: Package, tone: "text-amber-500" },
-    { label: "Incidentes em aberto", value: openIncidents, icon: Shield, tone: "text-red-500" },
+    {
+      label: "Convites ativos",
+      value: visitorCount,
+      icon: Users,
+      tone: "text-blue-500",
+    },
+    {
+      label: "Reservas confirmadas",
+      value: reservationCount,
+      icon: CalendarClock,
+      tone: "text-emerald-500",
+    },
+    {
+      label: "Entregas na portaria",
+      value: waitingDeliveries,
+      icon: Package,
+      tone: "text-amber-500",
+    },
+    {
+      label: "Incidentes em aberto",
+      value: openIncidents,
+      icon: Shield,
+      tone: "text-red-500",
+    },
   ];
 
   return (
@@ -257,6 +307,41 @@ const HomePage = () => {
         </div>
       </motion.div>
 
+      {notificationPermission !== "granted" ? (
+        <motion.button
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.02 }}
+          type="button"
+          onClick={() => void handleNotificationPermission()}
+          className="w-full rounded-[22px] border border-border/70 bg-card p-4 text-left shadow-sm transition-colors hover:bg-muted/30"
+        >
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <Bell className="h-4.5 w-4.5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-foreground">
+                {notificationPermission === "default"
+                  ? "Ativar alertas do aplicativo"
+                  : notificationPermission === "insecure"
+                    ? "HTTPS necessário para alertas nativos"
+                    : notificationPermission === "denied"
+                      ? "Permissão de notificações bloqueada"
+                      : "Este navegador não suporta notificações"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {notificationPermission === "default"
+                  ? "Receba avisos de entregas, chat, incidentes, convites e mural em tempo real."
+                  : notificationPermission === "insecure"
+                    ? "No acesso por IP/HTTP o navegador pode bloquear notificações nativas. Para push completo, use HTTPS."
+                    : "Você ainda pode acompanhar tudo pela central de notificações do app."}
+              </p>
+            </div>
+          </div>
+        </motion.button>
+      ) : null}
+
       {/* Pending notification banner */}
       {(pendingApprovalCount > 0 || unreadNotificationCount > 0) && (
         <motion.button
@@ -301,15 +386,22 @@ const HomePage = () => {
             <button
               key={action.label}
               onClick={() => navigate(action.path)}
-              className="flex items-center gap-3 rounded-[20px] border border-border bg-card px-4 py-3.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+              className="relative flex items-center gap-3 rounded-[20px] border border-border bg-card px-4 py-3.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
             >
+              {action.badgeCount > 0 ? (
+                <span className="absolute right-3 top-3 flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                  {action.badgeCount > 9 ? "9+" : action.badgeCount}
+                </span>
+              ) : null}
               <div
                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] ${action.tone}`}
               >
                 <action.icon className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-foreground">{action.label}</p>
+                <p className="text-sm font-semibold text-foreground">
+                  {action.label}
+                </p>
                 <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
                   {action.description}
                 </p>
@@ -338,7 +430,9 @@ const HomePage = () => {
               <p className="mt-4 text-2xl font-bold tracking-tight text-foreground">
                 {item.value}
               </p>
-              <p className="mt-0.5 text-xs text-muted-foreground">{item.label}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {item.label}
+              </p>
             </div>
           ))}
         </div>
@@ -382,9 +476,12 @@ const HomePage = () => {
       >
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-bold text-foreground">Atividade recente</h2>
+            <h2 className="text-sm font-bold text-foreground">
+              Atividade recente
+            </h2>
             <p className="text-xs text-muted-foreground">
-              {areasQuery.data?.length ?? 0} áreas comuns · {recentActivity.length} evento(s)
+              {areasQuery.data?.length ?? 0} áreas comuns ·{" "}
+              {recentActivity.length} evento(s)
             </p>
           </div>
           <Button
@@ -394,7 +491,15 @@ const HomePage = () => {
             onClick={() => navigate("/chat")}
           >
             <MessageCircle className="h-3.5 w-3.5" />
-            Portaria
+            Chat
+            {attentionCounts.chat > 0 ? (
+              <Badge
+                variant="warning"
+                className="ml-1 h-5 min-w-5 justify-center px-1.5 text-[10px]"
+              >
+                {attentionCounts.chat > 9 ? "9+" : attentionCounts.chat}
+              </Badge>
+            ) : null}
           </Button>
         </div>
 
@@ -405,8 +510,12 @@ const HomePage = () => {
               className="flex items-center gap-3 rounded-[18px] border border-border bg-card p-3.5 shadow-sm"
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{item.title}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{item.when}</p>
+                <p className="truncate text-sm font-medium text-foreground">
+                  {item.title}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {item.when}
+                </p>
               </div>
               <Badge variant={item.variant} className="shrink-0 text-[10px]">
                 {item.badge}

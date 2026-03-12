@@ -53,8 +53,8 @@ export function showBrowserNotification(params: {
   const notification = new Notification(params.title, {
     body: params.body,
     tag: params.tag,
-    icon: "/icon-192.png",
-    badge: "/icon-192.png",
+    icon: "/icon-192x192.png",
+    badge: "/icon-192x192.png",
   });
 
   notification.onclick = () => {

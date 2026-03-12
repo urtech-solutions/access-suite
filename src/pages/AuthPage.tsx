@@ -784,8 +784,13 @@ const AuthPage = () => {
           animate={{ opacity: 1, y: 0 }}
           className="flex flex-col items-center pb-8 pt-16"
         >
-          <div className="mb-5 flex h-[3.75rem] w-[3.75rem] items-center justify-center rounded-[20px] bg-amber-400 shadow-[0_8px_40px_rgba(250,204,21,0.30)]">
-            <ShieldCheck className="h-7 w-7 text-slate-900" />
+          <div className="mb-5 flex h-[4.25rem] w-[4.25rem] items-center justify-center rounded-[24px] border border-white/[0.08] bg-white/[0.04] shadow-[0_18px_56px_rgba(0,0,0,0.36)] backdrop-blur-md">
+            <img
+              src="/brand-symbol-512.png"
+              alt=""
+              aria-hidden
+              className="h-[3.15rem] w-[3.15rem] object-contain"
+            />
           </div>
           <h1 className="text-[2.25rem] font-extrabold leading-none tracking-[-0.07em] text-white">
             AccessOS

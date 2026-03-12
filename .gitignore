@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Capacitor — pastas geradas (não versionar)
+android/
+ios/
+
+# Env de build nativo (contém URL de produção)
+.env.capacitor
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

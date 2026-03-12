@@ -20,7 +20,8 @@
     "cap:dev:android": "npx cap run android --livereload --external",
     "cap:dev:ios": "npx cap run ios --livereload --external",
     "apk:debug": "npm run build:capacitor && npx cap sync android && cd android && ./gradlew assembleDebug",
-    "apk:release": "npm run build:capacitor && npx cap sync android && cd android && ./gradlew bundleRelease"
+    "apk:release": "npm run build:capacitor && npx cap sync android && cd android && ./gradlew bundleRelease",
+    "deploy:emulator": "npm run apk:debug && adb.exe install -r android/app/build/outputs/apk/debug/app-debug.apk"
   },
   "dependencies": {
     "@capacitor/android": "^8.2.0",

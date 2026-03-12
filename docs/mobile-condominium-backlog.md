@@ -112,11 +112,15 @@ Consideraremos a visao de condominios pronta quando:
 
 ### Next
 
+- `AREAS-EX` calendario operacional de areas comuns
+- `FIN-01` notificacoes e multas
+- `MEUAP-01` espaco financeiro e multas do morador
 - `VOICE` chamadas de voz
 - fechamento de midia rica no chat e nos incidentes
 
 ### Later
 
+- `FIN-INT` integracao com administradoras e financeiras
 - `VIDEO` chamadas de video
 - `PKG` empacotamento mobile, push e recursos nativos
 
@@ -195,6 +199,90 @@ Fechar o que falta para a primeira publicacao operacional dos modulos ja constru
 - o push web conseguir registrar subscription real;
 - o fluxo critico de cada perfil estiver validado ponta a ponta;
 - houver checklist de configuracao e rollback do ambiente.
+
+## Trilha Pos Deploy 1
+
+### AREAS-EX - Calendario operacional de areas comuns
+
+**Objetivo**
+
+Fechar o gap de areas comuns para suportar horario diferente em dias uteis, fim de semana e datas especificas com sobrescrita extraordinaria, sem quebrar o cadastro atual.
+
+**Tarefas**
+
+- backend:
+  - adicionar regra semanal por area;
+  - adicionar override por data;
+  - manter compatibilidade com `opening_time` e `closing_time` enquanto houver areas em modo legado;
+  - expor calendario resolvido por periodo para o app;
+- management:
+  - trocar o horario simples por editor de regra semanal e datas extraordinarias;
+  - destacar conflito e sobreposicao antes de salvar;
+- app:
+  - exibir `janela de hoje` e calendario resolvido;
+  - parar de assumir um unico horario fixo por area;
+- QA:
+  - validar dia util, fim de semana, feriado, manutencao, area fechada e conflito de reserva.
+
+**Pronto quando**
+
+- uma mesma area conseguir operar com janelas diferentes por tipo de dia;
+- uma data extraordinaria sobrescrever a regra base;
+- a agenda do app refletir o horario real da data consultada.
+
+### FIN-01 - Notificacoes e multas
+
+**Objetivo**
+
+Criar o dominio de notificacoes e multas para moradores, com emissao por `Management` e por perfil `Sindico`, historico, contestacao e meios de pagamento anexados.
+
+**Tarefas**
+
+- backend:
+  - criar modulo proprio de multas/notificacoes;
+  - separar `decision_status` e `settlement_status`;
+  - suportar timeline, anexos e meios de pagamento (`boleto`, `PIX`, `URL`, manual);
+  - notificar morador via inbox e push;
+- management:
+  - permitir emissao, revisao, cancelamento e marcacao de pagamento;
+  - exibir historico do morador e pendencias da unidade;
+- app:
+  - permitir leitura, ciencia e contestacao pelo morador;
+  - permitir emissao e revisao pelo perfil `Sindico` conforme permissao do site;
+- QA:
+  - validar emissao, contestacao, cancelamento, vencimento, pagamento e isolamento por tenant/site/unidade.
+
+**Pronto quando**
+
+- o sindico conseguir emitir notificacao ou multa com trilha auditavel;
+- o morador conseguir acompanhar o caso, contestar e ver o meio de pagamento;
+- o sistema conseguir diferenciar multa vencida, paga, cancelada e em recurso sem ambiguidade de status.
+
+### MEUAP-01 - Espaco Meu AP
+
+**Objetivo**
+
+Criar no app um espaco da unidade residencial separado de `Perfil`, concentrando financeiro, multas e visao da vida do apartamento.
+
+**Tarefas**
+
+- produto:
+  - separar `Home`, `Meu AP` e `Perfil`;
+  - manter `Perfil` apenas para conta, senha, sessao e configuracoes do app;
+- app:
+  - criar area `Meu AP` com abas `Resumo`, `Financeiro` e `Multas`;
+  - mostrar pendencias, historico e documentos vinculados;
+  - permitir acesso rapido a contestacao de multa e aos meios de pagamento;
+- backend:
+  - expor endpoints agregados do contexto residencial para alimentar a visao;
+- QA:
+  - validar contexto correto por unidade e multiplos contextos do mesmo CPF.
+
+**Pronto quando**
+
+- o morador conseguir enxergar a vida financeira da unidade sem entrar em `Perfil`;
+- multas e informacoes financeiras ficarem centralizadas em uma navegacao propria;
+- a troca de contexto continuar correta em tenants e sites diferentes.
 
 ## Epic AUTH - Identidade E Sessao
 

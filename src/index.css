@@ -119,4 +119,19 @@
   .safe-top {
     padding-top: env(safe-area-inset-top, 0px);
   }
+
+  .safe-left {
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+
+  .safe-right {
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  /* Smooth scroll nativo + overscroll controlado */
+  .scroll-container {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    scroll-padding-bottom: 7rem;
+  }
 }

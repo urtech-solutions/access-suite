@@ -19,6 +19,7 @@ const BulletinPage = lazy(() => import("@/pages/BulletinPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
 const CommonAreasPage = lazy(() => import("@/pages/CommonAreasPage"));
 const DeliveriesPage = lazy(() => import("@/pages/DeliveriesPage"));
+const FinanceiroPage = lazy(() => import("@/pages/FinanceiroPage"));
 const HomePage = lazy(() => import("@/pages/HomePage"));
 const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
 const NotFound = lazy(() => import("@/pages/NotFound"));
@@ -79,6 +80,7 @@ const App = () => (
             <Route path="/visitors" element={<VisitorsPage />} />
             <Route path="/common-areas" element={<CommonAreasPage />} />
             <Route path="/deliveries" element={<DeliveriesPage />} />
+            <Route path="/financeiro" element={<FinanceiroPage />} />
             <Route path="/incidents" element={<IncidentsPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/bulletin" element={<BulletinPage />} />

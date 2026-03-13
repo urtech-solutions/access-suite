@@ -7,8 +7,8 @@ import {
   MessageCircle,
   Package,
   Shield,
-  UserRound,
   Users,
+  Wallet,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -165,11 +165,11 @@ const HomePage = () => {
       badgeCount: attentionCounts.bulletin,
     },
     {
-      icon: UserRound,
-      label: "Perfil",
-      path: "/profile",
-      tone: "bg-slate-500/10 text-slate-600",
-      description: "Conta e sessão",
+      icon: Wallet,
+      label: "Financeiro",
+      path: "/financeiro",
+      tone: "bg-teal-500/10 text-teal-600",
+      description: "Pagamentos e multas",
       badgeCount: 0,
     },
   ];

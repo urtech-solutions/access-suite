@@ -1,9 +1,9 @@
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  AlertTriangle,
   CalendarClock,
   Home,
   MessageCircle,
+  UserRound,
   Users,
 } from "lucide-react";
 
@@ -19,13 +19,8 @@ const tabs = [
     label: "Reservas",
     exact: false,
   },
-  {
-    path: "/incidents",
-    icon: AlertTriangle,
-    label: "Incidentes",
-    exact: false,
-  },
   { path: "/chat", icon: MessageCircle, label: "Chat", exact: false },
+  { path: "/profile", icon: UserRound, label: "Perfil", exact: false },
 ];
 
 const AppLayout = () => {

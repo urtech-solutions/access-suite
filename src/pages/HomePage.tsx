@@ -1,8 +1,12 @@
+import { useState } from "react";
 import {
   AlertTriangle,
   Bell,
   CalendarClock,
   ChevronRight,
+  ChevronsUpDown,
+  Check,
+  Loader2,
   Megaphone,
   MessageCircle,
   Package,
@@ -12,15 +16,25 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
-import { ResidenceContextToggle } from "@/features/session/ActiveResidenceSwitcher";
 import { ConnectivityPill } from "@/features/shared/ConnectivityPill";
 import { useSession } from "@/features/session/SessionProvider";
+import {
+  formatResidentCurrentAccess,
+  formatResidentContextMeta,
+} from "@/features/session/resident-context";
 import {
   getBrowserNotificationPermission,
   requestBrowserNotificationPermission,
@@ -35,6 +49,7 @@ import {
   listReservations,
   listVisitors,
 } from "@/services/mobile-app.service";
+import { cn } from "@/lib/utils";
 
 function formatWhen(value: string) {
   return new Date(value).toLocaleString("pt-BR", {
@@ -52,28 +67,41 @@ function resolveGreeting() {
   return "Boa noite";
 }
 
-/* ---------- skeleton placeholder ---------- */
-function CardSkeleton({ className }: { className?: string }) {
-  return (
-    <div
-      className={`animate-pulse rounded-[20px] border border-border bg-card p-4 shadow-sm ${className ?? ""}`}
-    >
-      <div className="h-4 w-10 rounded bg-muted" />
-      <div className="mt-4 h-7 w-12 rounded bg-muted" />
-      <div className="mt-2 h-3 w-24 rounded bg-muted" />
-    </div>
-  );
-}
-
 const HomePage = () => {
   const navigate = useNavigate();
-  const { resident, snapshot, connectionState } = useSession();
+  const { resident, residents, snapshot, connectionState, switchResident } =
+    useSession();
   const { attentionCounts, unreadCount } = useResidentNotificationCenter();
   const [notificationPermission, setNotificationPermission] =
     useState<BrowserNotificationPermissionState>(
       getBrowserNotificationPermission(),
     );
+  const [contextSheetOpen, setContextSheetOpen] = useState(false);
+  const [switchingId, setSwitchingId] = useState<number | null>(null);
 
+  const canSwitchContext = residents.length > 1;
+
+  async function handleSwitchContext(nextId: number) {
+    if (nextId === resident.id) {
+      setContextSheetOpen(false);
+      return;
+    }
+    setSwitchingId(nextId);
+    try {
+      await switchResident(nextId);
+      setContextSheetOpen(false);
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message.trim()
+          ? err.message
+          : "Não foi possível trocar a residência.",
+      );
+    } finally {
+      setSwitchingId(null);
+    }
+  }
+
+  // ─── Queries ───
   const visitorsQuery = useQuery({
     queryKey: ["visitors", resident.id, snapshot.mode, connectionState],
     queryFn: () => listVisitors(snapshot, connectionState, resident),
@@ -119,6 +147,7 @@ const HomePage = () => {
     resident.role === "MORADOR" &&
     deliverySettingsQuery.data?.enabled !== false;
 
+  // ─── Derived data ───
   const quickActions = [
     {
       icon: Users,
@@ -175,21 +204,6 @@ const HomePage = () => {
   ];
 
   const deliveries = deliveriesQuery.data ?? [];
-  const visitorCount =
-    visitorsQuery.data?.filter(
-      (item) => item.status === "PENDING" || item.status === "ACTIVE",
-    ).length ?? 0;
-  const reservationCount =
-    reservationsQuery.data?.filter(
-      (item) => item.person.id === resident.id && item.status === "CONFIRMED",
-    ).length ?? 0;
-  const waitingDeliveries = deliveries.filter(
-    (item) => item.status === "ARRIVED",
-  ).length;
-  const openIncidents =
-    incidentsQuery.data?.filter(
-      (item) => item.status === "OPEN" || item.status === "IN_PROGRESS",
-    ).length ?? 0;
   const pinnedNotice =
     bulletinQuery.data?.find((item) => item.pinned) ?? bulletinQuery.data?.[0];
   const unreadNotificationCount = unreadCount;
@@ -237,72 +251,28 @@ const HomePage = () => {
     })),
   ].slice(0, 4);
 
-  const stats = [
-    {
-      label: "Convites ativos",
-      value: visitorCount,
-      icon: Users,
-      tone: "text-blue-600",
-      bg: "bg-blue-500/8",
-    },
-    {
-      label: "Reservas confirmadas",
-      value: reservationCount,
-      icon: CalendarClock,
-      tone: "text-emerald-600",
-      bg: "bg-emerald-500/8",
-    },
-    {
-      label: "Entregas na portaria",
-      value: waitingDeliveries,
-      icon: Package,
-      tone: "text-amber-600",
-      bg: "bg-amber-500/8",
-    },
-    {
-      label: "Incidentes abertos",
-      value: openIncidents,
-      icon: Shield,
-      tone: "text-red-600",
-      bg: "bg-red-500/8",
-    },
-  ];
-
-  const isLoadingStats =
-    visitorsQuery.isLoading ||
-    reservationsQuery.isLoading ||
-    deliveriesQuery.isLoading ||
-    incidentsQuery.isLoading;
+  const unitLabel = formatResidentCurrentAccess(resident);
 
   return (
-    <div className="space-y-5 px-4 pb-4 pt-5">
-      {/* ─── Hero card ─── */}
+    <div className="space-y-4 px-4 pb-4 pt-5">
+      {/* ─── 1. Hero compacto ─── */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative overflow-hidden rounded-3xl border border-primary/10 bg-primary px-5 pb-5 pt-5 text-primary-foreground shadow-xl shadow-primary/15"
+        className="relative overflow-hidden rounded-3xl border border-primary/10 bg-primary px-5 pb-4 pt-5 text-primary-foreground shadow-xl shadow-primary/15"
       >
-        <div className="absolute inset-x-0 top-0 h-28 bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.25),transparent_50%)]" />
+        <div className="absolute inset-x-0 top-0 h-24 bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.25),transparent_50%)]" />
 
         <div className="relative z-10">
-          {/* Greeting + bell */}
+          {/* Row 1: greeting + name + bell */}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-[0.25em] text-primary-foreground/50">
                 {resolveGreeting()}
               </p>
-              <h1 className="mt-1 truncate text-2xl font-extrabold leading-tight tracking-tight">
+              <h1 className="mt-0.5 truncate text-2xl font-extrabold leading-tight tracking-tight">
                 {resident.name.split(" ")[0]}
               </h1>
-              <span
-                className={`mt-2 inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-                  resident.role === "SINDICO"
-                    ? "bg-amber-400/20 text-amber-300"
-                    : "bg-primary-foreground/12 text-primary-foreground/70"
-                }`}
-              >
-                {resident.role === "SINDICO" ? "Síndico" : "Morador"}
-              </span>
             </div>
 
             <Button
@@ -322,85 +292,129 @@ const HomePage = () => {
             </Button>
           </div>
 
-          {/* Context + connectivity */}
-          <div className="mt-4 space-y-2">
-            <ResidenceContextToggle variant="hero" />
-            <ConnectivityPill />
+          {/* Row 2: unit context (compact inline) */}
+          <div className="mt-2.5 flex items-center gap-2">
+            <span
+              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                resident.role === "SINDICO"
+                  ? "bg-amber-400/20 text-amber-300"
+                  : "bg-primary-foreground/12 text-primary-foreground/60"
+              }`}
+            >
+              {resident.role === "SINDICO" ? "Síndico" : "Morador"}
+            </span>
+
+            <span className="text-[11px] text-primary-foreground/50">·</span>
+
+            {canSwitchContext ? (
+              <button
+                onClick={() => setContextSheetOpen(true)}
+                className="flex items-center gap-1 rounded-full bg-primary-foreground/8 px-2.5 py-0.5 text-[11px] font-medium text-primary-foreground/70 transition-colors hover:bg-primary-foreground/15 active:scale-95"
+              >
+                {unitLabel}
+                <ChevronsUpDown className="h-3 w-3 opacity-60" />
+              </button>
+            ) : (
+              <span className="text-[11px] font-medium text-primary-foreground/60">
+                {unitLabel}
+              </span>
+            )}
           </div>
+
+          {/* Connectivity (only when relevant) */}
+          <ConnectivityPill className="mt-2" />
         </div>
       </motion.div>
 
-      {/* ─── Notification permission banner ─── */}
-      {notificationPermission !== "granted" && (
+      {/* ─── 2. Mural em destaque (posição de destaque) ─── */}
+      {pinnedNotice && (
         <motion.button
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.02 }}
-          type="button"
-          onClick={() => void handleNotificationPermission()}
-          className="w-full rounded-2xl border border-border/70 bg-card p-4 text-left shadow-sm transition-colors active:scale-[0.98] hover:bg-muted/30"
+          onClick={() => navigate("/bulletin")}
+          className="w-full rounded-2xl border border-violet-400/25 bg-gradient-to-br from-violet-500/8 to-violet-500/3 p-4 text-left transition-colors active:scale-[0.98] hover:from-violet-500/12"
         >
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <Bell className="h-5 w-5" />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-500/15 text-violet-500">
+              <Megaphone className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-semibold text-foreground">
-                {notificationPermission === "default"
-                  ? "Ativar alertas do aplicativo"
-                  : notificationPermission === "insecure"
-                    ? "HTTPS necessário para alertas nativos"
-                    : notificationPermission === "denied"
-                      ? "Permissão de notificações bloqueada"
-                      : "Este navegador não suporta notificações"}
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-violet-500/70">
+                Mural em destaque
               </p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {notificationPermission === "default"
-                  ? "Receba avisos de entregas, chat, incidentes e convites em tempo real."
-                  : notificationPermission === "insecure"
-                    ? "Para push completo, use acesso via HTTPS."
-                    : "Acompanhe tudo pela central de notificações do app."}
+              <p className="mt-1 text-[13px] font-semibold leading-snug text-foreground">
+                {pinnedNotice.title}
+              </p>
+              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                {pinnedNotice.content}
               </p>
             </div>
+            <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
           </div>
         </motion.button>
       )}
 
-      {/* ─── Pending approval / unread banner ─── */}
-      {(pendingApprovalCount > 0 || unreadNotificationCount > 0) && (
+      {/* ─── 3. Banners de atenção ─── */}
+      {notificationPermission !== "granted" &&
+        notificationPermission !== "unsupported" && (
         <motion.button
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.03 }}
-          onClick={() => navigate("/notifications")}
-          className="w-full rounded-2xl border border-amber-400/20 bg-amber-400/8 p-4 text-left transition-colors active:scale-[0.98] hover:bg-amber-400/12"
+          type="button"
+          onClick={() => void handleNotificationPermission()}
+          className="w-full rounded-2xl border border-border/70 bg-card p-3.5 text-left shadow-sm transition-colors active:scale-[0.98] hover:bg-muted/30"
         >
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-400 text-slate-900">
-              <Bell className="h-5 w-5" />
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Bell className="h-4 w-4" />
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-semibold text-foreground">
-                {pendingApprovalCount > 0
-                  ? `${pendingApprovalCount} cadastro(s) aguardando aprovação`
-                  : `${unreadNotificationCount} notificação(ões) não lidas`}
-              </p>
-              {monitoringCount > 0 && (
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {monitoringCount} retorno(s) operacional(is) disponíveis
-                </p>
-              )}
-            </div>
-            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <p className="text-[12px] font-medium text-foreground">
+              {notificationPermission === "default"
+                ? "Toque para ativar notificações"
+                : notificationPermission === "insecure"
+                  ? "HTTPS necessário para alertas"
+                  : "Notificações bloqueadas"}
+            </p>
           </div>
         </motion.button>
       )}
 
-      {/* ─── Quick actions ─── */}
+      {(pendingApprovalCount > 0 || unreadNotificationCount > 0) && (
+        <motion.button
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.04 }}
+          onClick={() => navigate("/notifications")}
+          className="w-full rounded-2xl border border-amber-400/20 bg-amber-400/8 p-3.5 text-left transition-colors active:scale-[0.98] hover:bg-amber-400/12"
+        >
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-400 text-slate-900">
+              <Bell className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[12px] font-semibold text-foreground">
+                {pendingApprovalCount > 0
+                  ? `${pendingApprovalCount} aprovação(ões) pendente(s)`
+                  : `${unreadNotificationCount} notificação(ões) não lidas`}
+              </p>
+              {monitoringCount > 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  {monitoringCount} retorno(s) operacional(is)
+                </p>
+              )}
+            </div>
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" />
+          </div>
+        </motion.button>
+      )}
+
+      {/* ─── 4. Quick actions ─── */}
       <motion.section
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.05 }}
+        transition={{ delay: 0.06 }}
       >
         <h2 className="mb-3 text-sm font-bold text-foreground">
           Acesso rápido
@@ -435,93 +449,21 @@ const HomePage = () => {
         </div>
       </motion.section>
 
-      {/* ─── Stats ─── */}
+      {/* ─── 5. Atividade recente ─── */}
       <motion.section
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.09 }}
-      >
-        <h2 className="mb-3 text-sm font-bold text-foreground">Resumo</h2>
-        {isLoadingStats ? (
-          <div className="grid grid-cols-2 gap-2.5">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <CardSkeleton key={i} />
-            ))}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-2.5">
-            {stats.map((item) => (
-              <div
-                key={item.label}
-                className="rounded-2xl border border-border bg-card p-4 shadow-sm"
-              >
-                <div
-                  className={`flex h-8 w-8 items-center justify-center rounded-lg ${item.bg}`}
-                >
-                  <item.icon className={`h-4 w-4 ${item.tone}`} />
-                </div>
-                <p className="mt-3 text-2xl font-bold tabular-nums tracking-tight text-foreground">
-                  {item.value}
-                </p>
-                <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                  {item.label}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </motion.section>
-
-      {/* ─── Pinned bulletin ─── */}
-      {pinnedNotice && (
-        <motion.button
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.13 }}
-          onClick={() => navigate("/bulletin")}
-          className="w-full rounded-2xl border border-violet-400/20 bg-violet-500/5 p-4 text-left transition-colors active:scale-[0.98] hover:bg-violet-500/8"
-        >
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-500/15 text-violet-500">
-              <Megaphone className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                Mural em destaque
-              </p>
-              <p className="mt-1 text-[13px] font-semibold text-foreground">
-                {pinnedNotice.title}
-              </p>
-              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-                {pinnedNotice.content}
-              </p>
-            </div>
-            <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-          </div>
-        </motion.button>
-      )}
-
-      {/* ─── Recent activity ─── */}
-      <motion.section
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.17 }}
+        transition={{ delay: 0.1 }}
         className="space-y-3"
       >
         <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-bold text-foreground">
-              Atividade recente
-            </h2>
-            <p className="text-[11px] text-muted-foreground">
-              {areasQuery.data?.length ?? 0} áreas comuns ·{" "}
-              {recentActivity.length} evento(s)
-            </p>
-          </div>
+          <h2 className="text-sm font-bold text-foreground">
+            Atividade recente
+          </h2>
           <Button
             variant="ghost"
             size="sm"
-            className="h-8 rounded-full px-3 text-xs active:scale-95"
+            className="h-7 rounded-full px-2.5 text-[11px] active:scale-95"
             onClick={() => navigate("/chat")}
           >
             <MessageCircle className="h-3.5 w-3.5" />
@@ -529,7 +471,7 @@ const HomePage = () => {
             {attentionCounts.chat > 0 && (
               <Badge
                 variant="warning"
-                className="ml-1 h-5 min-w-5 justify-center px-1.5 text-[10px]"
+                className="ml-1 h-4 min-w-4 justify-center px-1 text-[9px]"
               >
                 {attentionCounts.chat > 9 ? "9+" : attentionCounts.chat}
               </Badge>
@@ -541,7 +483,7 @@ const HomePage = () => {
           {recentActivity.map((item) => (
             <div
               key={item.id}
-              className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3.5 shadow-sm"
+              className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm"
             >
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] font-medium text-foreground">
@@ -557,12 +499,73 @@ const HomePage = () => {
             </div>
           ))}
           {recentActivity.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-border bg-card/50 p-5 text-center text-xs text-muted-foreground">
-              Nenhuma atividade recente no momento.
+            <div className="rounded-2xl border border-dashed border-border bg-card/50 p-4 text-center text-xs text-muted-foreground">
+              Nenhuma atividade recente.
             </div>
           )}
         </div>
       </motion.section>
+
+      {/* ─── Context switch sheet ─── */}
+      <Sheet open={contextSheetOpen} onOpenChange={setContextSheetOpen}>
+        <SheetContent
+          side="bottom"
+          className="mx-auto w-full max-w-md rounded-t-[28px] px-5 pb-8 pt-5"
+        >
+          <SheetHeader className="text-left">
+            <SheetTitle>
+              {resident.role === "SINDICO"
+                ? "Trocar site ativo"
+                : "Trocar residência"}
+            </SheetTitle>
+          </SheetHeader>
+
+          <div className="mt-5 space-y-2.5">
+            {residents.map((item) => {
+              const isActive = item.id === resident.id;
+              const isSwitching = switchingId === item.id;
+
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => void handleSwitchContext(item.id)}
+                  disabled={Boolean(switchingId)}
+                  className={cn(
+                    "w-full rounded-2xl border p-4 text-left transition-all",
+                    isActive
+                      ? "border-primary bg-primary text-primary-foreground shadow-md"
+                      : "border-border bg-card hover:border-primary/30",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">
+                        {item.site_name}
+                      </p>
+                      <p
+                        className={cn(
+                          "mt-0.5 text-xs",
+                          isActive
+                            ? "text-primary-foreground/70"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {formatResidentContextMeta(item)}
+                      </p>
+                    </div>
+                    {isSwitching ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : isActive ? (
+                      <Check className="h-4 w-4" />
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };

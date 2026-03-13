@@ -1,3 +1,5 @@
+import { Capacitor } from "@capacitor/core";
+
 export type BrowserNotificationPermissionState =
   | NotificationPermission
   | "unsupported"
@@ -9,12 +11,15 @@ function isLocalhost() {
 }
 
 export function canUseBrowserNotifications() {
+  if (Capacitor.isNativePlatform()) return false;
   if (typeof window === "undefined") return false;
   if (!("Notification" in window)) return false;
   return window.isSecureContext || isLocalhost();
 }
 
 export function getBrowserNotificationPermission(): BrowserNotificationPermissionState {
+  if (Capacitor.isNativePlatform()) return "unsupported";
+
   if (typeof window === "undefined" || !("Notification" in window)) {
     return "unsupported";
   }

@@ -20,13 +20,6 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -40,14 +33,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/features/shared/PageHeader";
 import { useSession } from "@/features/session/SessionProvider";
 import {
+  INCIDENTS_MODULE_KEY,
   addIncidentParticipant,
-  createIncident,
   getIncident,
   getIncidentSettings,
   listIncidentParticipantOptions,
   listIncidents,
   normalizeApiBaseUrl,
   sendIncidentMessage,
+  sessionHasModule,
   updateIncidentStatus,
 } from "@/services/mobile-app.service";
 import type {
@@ -182,18 +176,10 @@ function AttachmentChip({
 export default function IncidentsPage() {
   const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
-  const isResident = resident.role === "MORADOR";
-  const isSyndic = resident.role === "SINDICO";
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
   const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null);
   const [topicFilter, setTopicFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | IncidentStatus>("all");
-  const [incidentDraft, setIncidentDraft] = useState({
-    title: "",
-    description: "",
-    topicId: "",
-  });
-  const [incidentAttachment, setIncidentAttachment] = useState<File | null>(null);
   const [messageDraft, setMessageDraft] = useState("");
   const [messageAttachment, setMessageAttachment] = useState<File | null>(null);
   const [selectedParticipantId, setSelectedParticipantId] = useState("");
@@ -201,12 +187,24 @@ export default function IncidentsPage() {
   const settingsQuery = useQuery({
     queryKey: ["incident-settings", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => getIncidentSettings(snapshot, connectionState, resident),
+    enabled: hasIncidentsModule,
   });
 
   const incidentsQuery = useQuery({
-    queryKey: ["incidents", resident.id, snapshot.mode, connectionState],
-    queryFn: () => listIncidents(snapshot, connectionState, resident),
-    enabled: settingsQuery.data?.enabled !== false,
+    queryKey: [
+      "incidents",
+      resident.site_id,
+      statusFilter,
+      topicFilter,
+      snapshot.mode,
+      connectionState,
+    ],
+    queryFn: () =>
+      listIncidents(snapshot, connectionState, resident, {
+        status: statusFilter,
+        topicId: topicFilter,
+      }),
+    enabled: hasIncidentsModule && settingsQuery.data?.enabled === true,
   });
 
   const filteredIncidents = useMemo(() => {
@@ -222,18 +220,30 @@ export default function IncidentsPage() {
   }, [incidentsQuery.data, statusFilter, topicFilter]);
 
   const incidentDetailQuery = useQuery({
-    queryKey: ["incident-detail", selectedIncidentId, resident.id, snapshot.mode, connectionState],
+    queryKey: [
+      "incident-detail",
+      selectedIncidentId,
+      resident.site_id,
+      snapshot.mode,
+      connectionState,
+    ],
     queryFn: () =>
       selectedIncidentId
         ? getIncident(snapshot, connectionState, resident, selectedIncidentId)
         : null,
-    enabled: Boolean(selectedIncidentId),
+    enabled:
+      Boolean(selectedIncidentId) &&
+      hasIncidentsModule &&
+      settingsQuery.data?.enabled === true,
   });
 
   const participantOptionsQuery = useQuery({
     queryKey: ["incident-participant-options", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listIncidentParticipantOptions(snapshot, connectionState, resident),
-    enabled: isSyndic && Boolean(selectedIncidentId) && settingsQuery.data?.enabled !== false,
+    enabled:
+      Boolean(selectedIncidentId) &&
+      hasIncidentsModule &&
+      settingsQuery.data?.enabled === true,
   });
 
   const selectedIncident =
@@ -241,7 +251,11 @@ export default function IncidentsPage() {
     filteredIncidents.find((incident) => incident.id === selectedIncidentId) ??
     null;
 
-  const availableTopics = settingsQuery.data?.topics ?? [];
+  const activeSiteName = settingsQuery.data?.site?.name ?? resident.site_name;
+  const availableTopics = (settingsQuery.data?.topics ?? [])
+    .filter((topic) => topic.active)
+    .slice()
+    .sort((left, right) => left.sort_order - right.sort_order);
   const participantOptions = (participantOptionsQuery.data ?? []).filter(
     (option) =>
       !(selectedIncident?.participants ?? []).some(
@@ -250,30 +264,6 @@ export default function IncidentsPage() {
           participant.unit_label === (option.unit_label ?? null),
       ),
   );
-
-  const createIncidentMutation = useMutation({
-    mutationFn: () =>
-      createIncident(snapshot, connectionState, resident, {
-        title: incidentDraft.title,
-        description: incidentDraft.description,
-        topic_id: Number(incidentDraft.topicId),
-        attachment: incidentAttachment,
-      }),
-    onSuccess: async (incident) => {
-      await queryClient.invalidateQueries({ queryKey: ["incidents"] });
-      queryClient.setQueryData(["incident-detail", incident.id, resident.id, snapshot.mode, connectionState], incident);
-      setSelectedIncidentId(incident.id);
-      setDialogOpen(false);
-      setIncidentDraft({ title: "", description: "", topicId: "" });
-      setIncidentAttachment(null);
-      toast.success("Incidente aberto com sucesso.");
-    },
-    onError: (error) => {
-      toast.error(
-        error instanceof Error ? error.message : "Não foi possível abrir o incidente.",
-      );
-    },
-  });
 
   const sendMessageMutation = useMutation({
     mutationFn: () =>
@@ -287,7 +277,7 @@ export default function IncidentsPage() {
       if (!incident) return;
       await queryClient.invalidateQueries({ queryKey: ["incidents"] });
       queryClient.setQueryData(
-        ["incident-detail", incident.id, resident.id, snapshot.mode, connectionState],
+        ["incident-detail", incident.id, resident.site_id, snapshot.mode, connectionState],
         incident,
       );
       setMessageDraft("");
@@ -316,7 +306,7 @@ export default function IncidentsPage() {
       if (!incident) return;
       await queryClient.invalidateQueries({ queryKey: ["incidents"] });
       queryClient.setQueryData(
-        ["incident-detail", incident.id, resident.id, snapshot.mode, connectionState],
+        ["incident-detail", incident.id, resident.site_id, snapshot.mode, connectionState],
         incident,
       );
       setSelectedParticipantId("");
@@ -344,7 +334,7 @@ export default function IncidentsPage() {
       if (!incident) return;
       await queryClient.invalidateQueries({ queryKey: ["incidents"] });
       queryClient.setQueryData(
-        ["incident-detail", incident.id, resident.id, snapshot.mode, connectionState],
+        ["incident-detail", incident.id, resident.site_id, snapshot.mode, connectionState],
         incident,
       );
       toast.success("Status do incidente atualizado.");
@@ -373,12 +363,6 @@ export default function IncidentsPage() {
       tone: "text-success",
     },
   ];
-
-  function resetCreateDialog() {
-    setDialogOpen(false);
-    setIncidentDraft({ title: "", description: "", topicId: "" });
-    setIncidentAttachment(null);
-  }
 
   function renderTopicLabel(topic?: IncidentTopic | null, fallback?: string | null) {
     return topic?.label ?? fallback ?? "Incidente";
@@ -456,61 +440,59 @@ export default function IncidentsPage() {
           </div>
         </div>
 
-        {isSyndic ? (
-          <div className="rounded-[28px] border border-border bg-card p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-foreground">Condução do incidente</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Atualize o status, distribua participantes e mantenha a trilha do tratamento.
-                </p>
-              </div>
-              <Sparkles className="h-5 w-5 text-primary" />
+        <div className="rounded-[28px] border border-border bg-card p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Condução do incidente</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Atualize o status, distribua participantes e mantenha a trilha do tratamento.
+              </p>
             </div>
+            <Sparkles className="h-5 w-5 text-primary" />
+          </div>
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              {(["OPEN", "IN_PROGRESS", "CLOSED"] as IncidentStatus[]).map((status) => (
-                <Button
-                  key={status}
-                  variant={selectedIncident.status === status ? "accent" : "outline"}
-                  size="sm"
-                  className="rounded-full"
-                  disabled={updateStatusMutation.isPending}
-                  onClick={() => updateStatusMutation.mutate(status)}
-                >
-                  {statusMeta[status].label}
-                </Button>
-              ))}
-            </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {(["OPEN", "IN_PROGRESS", "CLOSED"] as IncidentStatus[]).map((status) => (
+              <Button
+                key={status}
+                variant={selectedIncident.status === status ? "accent" : "outline"}
+                size="sm"
+                className="rounded-full"
+                disabled={updateStatusMutation.isPending}
+                onClick={() => updateStatusMutation.mutate(status)}
+              >
+                {statusMeta[status].label}
+              </Button>
+            ))}
+          </div>
 
-            <div className="mt-4 rounded-[22px] border border-border bg-muted/40 p-3">
-              <Label>Adicionar morador ao incidente</Label>
-              <div className="mt-2 flex gap-2">
-                <Select value={selectedParticipantId} onValueChange={setSelectedParticipantId}>
-                  <SelectTrigger className="flex-1">
-                    <SelectValue placeholder="Selecione um morador" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {participantOptions.map((option: IncidentParticipantOption) => (
-                      <SelectItem key={option.id} value={String(option.id)}>
-                        {option.name}
-                        {option.unit_label ? ` • ${option.unit_label}` : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  variant="outline"
-                  className="rounded-2xl"
-                  disabled={!selectedParticipantId || addParticipantMutation.isPending}
-                  onClick={() => addParticipantMutation.mutate()}
-                >
-                  <UserPlus className="h-4 w-4" />
-                </Button>
-              </div>
+          <div className="mt-4 rounded-[22px] border border-border bg-muted/40 p-3">
+            <Label>Adicionar participante ao incidente</Label>
+            <div className="mt-2 flex gap-2">
+              <Select value={selectedParticipantId} onValueChange={setSelectedParticipantId}>
+                <SelectTrigger className="flex-1">
+                  <SelectValue placeholder="Selecione uma pessoa" />
+                </SelectTrigger>
+                <SelectContent>
+                  {participantOptions.map((option: IncidentParticipantOption) => (
+                    <SelectItem key={option.id} value={String(option.id)}>
+                      {option.name}
+                      {option.unit_label ? ` • ${option.unit_label}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                className="rounded-2xl"
+                disabled={!selectedParticipantId || addParticipantMutation.isPending}
+                onClick={() => addParticipantMutation.mutate()}
+              >
+                <UserPlus className="h-4 w-4" />
+              </Button>
             </div>
           </div>
-        ) : null}
+        </div>
 
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
@@ -670,118 +652,9 @@ export default function IncidentsPage() {
     <div className="space-y-6 px-4 pb-6 pt-8">
       <PageHeader
         title="Incidentes"
-        subtitle={
-          isResident
-            ? "Abra ocorrências, envie evidências e acompanhe a solução em formato conversacional."
-            : "Trate incidentes do condomínio com visão tática de status, participantes e histórico."
-        }
+        subtitle="Fila operacional do site ativo, com timeline, evidências, participantes e histórico de tratamento."
         backTo="/"
-        action={
-          isResident ? (
-            <Dialog
-              open={dialogOpen}
-              onOpenChange={(open) => {
-                if (!open) resetCreateDialog();
-                else setDialogOpen(true);
-              }}
-            >
-              <DialogTrigger asChild>
-                <Button variant="accent" size="sm" className="rounded-full">
-                  <AlertTriangle className="h-4 w-4" />
-                  Novo
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-md rounded-[28px]">
-                <DialogHeader>
-                  <DialogTitle>Abrir incidente</DialogTitle>
-                </DialogHeader>
-
-                <div className="space-y-4 pt-2">
-                  <div className="space-y-2">
-                    <Label>Tópico</Label>
-                    <Select
-                      value={incidentDraft.topicId}
-                      onValueChange={(value) =>
-                        setIncidentDraft((current) => ({ ...current, topicId: value }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selecione o tipo do incidente" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableTopics.map((topic) => (
-                          <SelectItem key={topic.id} value={String(topic.id)}>
-                            {topic.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Título</Label>
-                    <Input
-                      value={incidentDraft.title}
-                      onChange={(event) =>
-                        setIncidentDraft((current) => ({
-                          ...current,
-                          title: event.target.value,
-                        }))
-                      }
-                      placeholder="Ex.: Vazamento no teto da garagem"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Relato inicial</Label>
-                    <Textarea
-                      rows={5}
-                      value={incidentDraft.description}
-                      onChange={(event) =>
-                        setIncidentDraft((current) => ({
-                          ...current,
-                          description: event.target.value,
-                        }))
-                      }
-                      placeholder="Descreva o ocorrido, urgência, local e contexto."
-                    />
-                  </div>
-
-                  <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[22px] border border-dashed border-border bg-muted/30 px-4 py-4">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <ShieldPlus className="h-4 w-4" />
-                      <span>{incidentAttachment ? incidentAttachment.name : "Anexar imagem, vídeo ou áudio"}</span>
-                    </div>
-                    <input
-                      type="file"
-                      accept="image/*,video/*,audio/*"
-                      className="hidden"
-                      onChange={(event) =>
-                        setIncidentAttachment(event.target.files?.[0] ?? null)
-                      }
-                    />
-                  </label>
-
-                  <Button
-                    variant="accent"
-                    className="w-full rounded-[20px]"
-                    disabled={
-                      createIncidentMutation.isPending ||
-                      !incidentDraft.title.trim() ||
-                      !incidentDraft.description.trim() ||
-                      !incidentDraft.topicId
-                    }
-                    onClick={() => createIncidentMutation.mutate()}
-                  >
-                    Abrir incidente
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
-          ) : (
-            <Badge variant="warning">Síndico</Badge>
-          )
-        }
+        action={<Badge variant="outline">INCIDENTS</Badge>}
       />
 
       {settingsQuery.isLoading ? (
@@ -809,7 +682,7 @@ export default function IncidentsPage() {
         </div>
       ) : null}
 
-      {settingsQuery.data?.enabled !== false ? (
+      {settingsQuery.data?.enabled === true ? (
         <>
           <div className="relative overflow-hidden rounded-[30px] border border-primary/10 bg-[linear-gradient(145deg,rgba(6,14,24,0.98),rgba(29,78,216,0.92))] px-5 pb-5 pt-5 text-white shadow-xl shadow-slate-900/20">
             <div className="absolute inset-x-0 top-0 h-24 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.35),transparent_45%)]" />
@@ -824,9 +697,7 @@ export default function IncidentsPage() {
                     Central de incidentes
                   </p>
                   <p className="mt-1 text-lg font-semibold">
-                    {isResident
-                      ? "Abra um incidente com anexo e acompanhe a conversa até a solução."
-                      : "Conduza a solução com status, participantes e histórico rastreável."}
+                    Conduza a solução com status, participantes e histórico rastreável.
                   </p>
                 </div>
               </div>
@@ -842,6 +713,11 @@ export default function IncidentsPage() {
                 ))}
               </div>
             </div>
+          </div>
+
+          <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
+            <Label className="mb-2 block">Site ativo</Label>
+            <Input readOnly value={activeSiteName} className="bg-muted/45" />
           </div>
 
           <div className="grid grid-cols-[1fr_1fr] gap-3">

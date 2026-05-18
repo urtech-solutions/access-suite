@@ -5,12 +5,15 @@ import {
   cancelVisitor,
   createReservation,
   createVisitor,
+  listIncidents,
   loadBackendResidents,
+  logoutResidentAppSession,
   mapResidentContextToProfile,
   normalizeApiBaseUrl,
   readPendingActions,
   readPreviewState,
   saveSessionSnapshot,
+  sessionHasModule,
 } from "@/services/mobile-app.service";
 import type { CommonArea, SessionSnapshot } from "@/services/mobile-app.types";
 
@@ -282,5 +285,110 @@ describe("mobile-app service", () => {
     expect(created.pending_sync).toBe(true);
     expect(readPendingActions()).toHaveLength(1);
     expect(readPendingActions()[0].type).toBe("CREATE_RESERVATION");
+  });
+
+  it("revokes the current backend refresh token on logout", async () => {
+    const snapshot: SessionSnapshot = {
+      mode: "backend",
+      apiBaseUrl: "http://localhost:3000",
+      resident,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: null,
+        contexts: [],
+      },
+      token: "access-token",
+      refreshToken: "refresh-token",
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+      headers: {
+        get: () => null,
+      },
+      text: async () => "",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await logoutResidentAppSession(snapshot);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/resident-app-auth/logout",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ refresh_token: "refresh-token" }),
+      }),
+    );
+  });
+
+  it("gates incident requests by the INCIDENTS tenant module", async () => {
+    const snapshot: SessionSnapshot = {
+      mode: "backend",
+      apiBaseUrl: "http://localhost:3000",
+      resident,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: null,
+        contexts: [],
+      },
+      token: "access-token",
+      refreshToken: null,
+      user: { uuid: "user-1", modules: [] },
+    };
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(sessionHasModule(snapshot, "INCIDENTS")).toBe(false);
+    await expect(listIncidents(snapshot, "online", resident)).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("lists incidents with active site, status and topic filters", async () => {
+    const snapshot: SessionSnapshot = {
+      mode: "backend",
+      apiBaseUrl: "http://localhost:3000",
+      resident,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: null,
+        contexts: [],
+      },
+      token: "access-token",
+      refreshToken: null,
+      user: { uuid: "user-1", modules: ["INCIDENTS"] },
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
+      json: async () => [],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listIncidents(snapshot, "online", resident, {
+      status: "OPEN",
+      topicId: 9101,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/incidents?site_id=11&status=OPEN&topic_id=9101",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Bearer access-token",
+        }),
+      }),
+    );
   });
 });

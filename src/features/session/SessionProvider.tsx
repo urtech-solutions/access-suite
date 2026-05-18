@@ -17,6 +17,7 @@ import {
   listResidentAppSessions,
   loadBackendResidents,
   lookupResidentAppAccess,
+  logoutResidentAppSession,
   normalizeApiBaseUrl,
   readPendingActions,
   readPreviewState,
@@ -101,6 +102,7 @@ function buildLoggedOutBackendSnapshot(
     ...getDefaultSessionSnapshot(),
     mode: "backend",
     apiBaseUrl: current.apiBaseUrl,
+    user: null,
     resident: null,
     residentAuth: null,
     token: null,
@@ -411,6 +413,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         () => undefined,
       );
     }
+    void logoutResidentAppSession(snapshot).catch(() => undefined);
     clearStoredPushRegistration();
     const next = buildLoggedOutBackendSnapshot(snapshot);
     setSnapshot(next);

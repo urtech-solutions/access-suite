@@ -79,7 +79,7 @@ export function clearStoredPushRegistration() {
 }
 
 export async function ensurePushServiceWorker() {
-  return navigator.serviceWorker.register("/push-sw.js");
+  return navigator.serviceWorker.register(`${import.meta.env.BASE_URL}push-sw.js`);
 }
 
 export async function ensureWebPushSubscription(publicKey: string) {

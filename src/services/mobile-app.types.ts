@@ -4,6 +4,7 @@ export type ResidentRole = "MORADOR" | "SINDICO";
 export type ResidentAppProfileType = "RESIDENT" | "SYNDIC";
 
 export type ConnectionState = "online" | "offline";
+export type TenantModuleKey = "INCIDENTS" | string;
 
 export type VisitorStatus =
   | "PENDING"
@@ -101,6 +102,14 @@ export interface ResidentDeviceSession {
 export interface ResidentDeviceSessionList {
   current_session_uuid?: string | null;
   sessions: ResidentDeviceSession[];
+}
+
+export interface ResidentAppUser {
+  id?: number | string | null;
+  uuid?: string | null;
+  name?: string | null;
+  email?: string | null;
+  modules: TenantModuleKey[];
 }
 
 export interface ResidentProfile {
@@ -217,6 +226,7 @@ export interface IncidentTopic {
 
 export interface IncidentModuleSettings {
   id: number;
+  tenant_uuid?: string | null;
   site_id: number;
   enabled: boolean;
   site?: {
@@ -564,6 +574,7 @@ export interface SessionSnapshot {
   apiBaseUrl: string;
   token?: string | null;
   refreshToken?: string | null;
+  user?: ResidentAppUser | null;
   residentAuth?: ResidentAppSession | null;
   resident?: ResidentProfile | null;
 }

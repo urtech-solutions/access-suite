@@ -1,5 +1,6 @@
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
+  AlertTriangle,
   CalendarClock,
   Home,
   MessageCircle,
@@ -8,7 +9,12 @@ import {
 } from "lucide-react";
 
 import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
+import { useSession } from "@/features/session/SessionProvider";
 import { cn } from "@/lib/utils";
+import {
+  INCIDENTS_MODULE_KEY,
+  sessionHasModule,
+} from "@/services/mobile-app.service";
 
 const tabs = [
   { path: "/", icon: Home, label: "Início", exact: true },
@@ -20,13 +26,26 @@ const tabs = [
     exact: false,
   },
   { path: "/chat", icon: MessageCircle, label: "Chat", exact: false },
+  {
+    path: "/porteiro/incidentes",
+    icon: AlertTriangle,
+    label: "Incidentes",
+    exact: false,
+  },
   { path: "/profile", icon: UserRound, label: "Perfil", exact: false },
 ];
 
 const AppLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { snapshot } = useSession();
   const { attentionCounts } = useResidentNotificationCenter();
+  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  const visibleTabs = tabs.filter(
+    (tab) =>
+      tab.path !== "/porteiro/incidentes" ||
+      hasIncidentsModule,
+  );
 
   function isTabActive(tab: (typeof tabs)[number]) {
     if (tab.exact) return location.pathname === tab.path;
@@ -35,7 +54,7 @@ const AppLayout = () => {
 
   function resolveTabBadge(path: string) {
     if (path === "/visitors") return attentionCounts.visitors;
-    if (path === "/incidents") return attentionCounts.incidents;
+    if (path === "/porteiro/incidentes") return attentionCounts.incidents;
     if (path === "/chat") return attentionCounts.chat;
     return 0;
   }
@@ -56,8 +75,13 @@ const AppLayout = () => {
 
         {/* Bottom navigation */}
         <nav className="fixed bottom-0 left-1/2 z-50 w-full max-w-md -translate-x-1/2 px-3 pb-2 safe-bottom">
-          <div className="grid grid-cols-5 rounded-[26px] border border-border/60 bg-card/95 px-1.5 py-1.5 shadow-2xl shadow-black/12 backdrop-blur-xl">
-            {tabs.map((tab) => {
+          <div
+            className={cn(
+              "grid rounded-[26px] border border-border/60 bg-card/95 px-1.5 py-1.5 shadow-2xl shadow-black/12 backdrop-blur-xl",
+              visibleTabs.length > 5 ? "grid-cols-6" : "grid-cols-5",
+            )}
+          >
+            {visibleTabs.map((tab) => {
               const active = isTabActive(tab);
               const badge = resolveTabBadge(tab.path);
               return (

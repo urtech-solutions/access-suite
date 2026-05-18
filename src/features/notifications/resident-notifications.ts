@@ -337,7 +337,7 @@ function buildIncidentNotification(
       unit_label: incident.person?.unit_label ?? null,
       requires_action: false,
       action_label: "Abrir incidente",
-      target_path: "/incidents",
+      target_path: "/porteiro/incidentes",
       incident_id: incident.id,
     };
   }
@@ -362,7 +362,7 @@ function buildIncidentNotification(
       unit_label: incident.person?.unit_label ?? null,
       requires_action: false,
       action_label: "Acompanhar incidente",
-      target_path: "/incidents",
+      target_path: "/porteiro/incidentes",
       incident_id: incident.id,
     };
   }

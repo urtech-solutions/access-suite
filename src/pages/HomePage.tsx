@@ -41,13 +41,16 @@ import {
   type BrowserNotificationPermissionState,
 } from "@/lib/browser-notifications";
 import {
+  INCIDENTS_MODULE_KEY,
   getDeliverySettings,
+  getIncidentSettings,
   listBulletin,
   listCommonAreas,
   listDeliveries,
   listIncidents,
   listReservations,
   listVisitors,
+  sessionHasModule,
 } from "@/services/mobile-app.service";
 import { cn } from "@/lib/utils";
 
@@ -80,6 +83,7 @@ const HomePage = () => {
   const [switchingId, setSwitchingId] = useState<number | null>(null);
 
   const canSwitchContext = residents.length > 1;
+  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
 
   async function handleSwitchContext(nextId: number) {
     if (nextId === resident.id) {
@@ -105,11 +109,6 @@ const HomePage = () => {
   const visitorsQuery = useQuery({
     queryKey: ["visitors", resident.id, snapshot.mode, connectionState],
     queryFn: () => listVisitors(snapshot, connectionState, resident),
-  });
-
-  const incidentsQuery = useQuery({
-    queryKey: ["incidents", resident.id, snapshot.mode, connectionState],
-    queryFn: () => listIncidents(snapshot, connectionState, resident),
   });
 
   const bulletinQuery = useQuery({
@@ -147,6 +146,23 @@ const HomePage = () => {
     resident.role === "MORADOR" &&
     deliverySettingsQuery.data?.enabled !== false;
 
+  const incidentSettingsQuery = useQuery({
+    queryKey: [
+      "incident-settings",
+      resident.site_id,
+      snapshot.mode,
+      connectionState,
+    ],
+    queryFn: () => getIncidentSettings(snapshot, connectionState, resident),
+    enabled: hasIncidentsModule,
+  });
+
+  const incidentsQuery = useQuery({
+    queryKey: ["incidents", resident.site_id, snapshot.mode, connectionState],
+    queryFn: () => listIncidents(snapshot, connectionState, resident),
+    enabled: hasIncidentsModule && incidentSettingsQuery.data?.enabled === true,
+  });
+
   // ─── Derived data ───
   const quickActions = [
     {
@@ -177,14 +193,18 @@ const HomePage = () => {
           },
         ]
       : []),
-    {
-      icon: AlertTriangle,
-      label: "Incidentes",
-      path: "/incidents",
-      tone: "bg-red-500/10 text-red-600",
-      description: "Reportar problemas",
-      badgeCount: attentionCounts.incidents,
-    },
+    ...(hasIncidentsModule
+      ? [
+          {
+            icon: AlertTriangle,
+            label: "Incidentes",
+            path: "/porteiro/incidentes",
+            tone: "bg-red-500/10 text-red-600",
+            description: "Fila operacional",
+            badgeCount: attentionCounts.incidents,
+          },
+        ]
+      : []),
     {
       icon: Megaphone,
       label: "Mural",

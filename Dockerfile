@@ -31,7 +31,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-EXPOSE 8080
+EXPOSE 5123
 
 CMD ["npm", "run", "dev:mobile"]
 

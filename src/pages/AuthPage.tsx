@@ -76,7 +76,7 @@ function resolveProfileLabel(profileType: ResidentAppProfileType) {
 function resolveProfileDescription(profileType: ResidentAppProfileType) {
   return profileType === "SYNDIC"
     ? "Usa a senha do usuário do Management e abre o painel gerencial do site."
-    : "Usa senha própria do app e abre o painel residencial do morador.";
+    : "Usa o acesso liberado no cadastro de pessoas e abre o painel residencial.";
 }
 
 function buildMultiProfileMessage(profiles: ResidentAppLookupProfile[]) {
@@ -100,9 +100,9 @@ function buildProfileReadyMessage(profile: ResidentAppLookupProfile) {
 
   if (profile.has_password) {
     if (profile.contexts.length <= 1) {
-      return "Identidade de morador encontrada. Entre com sua senha para abrir o app.";
+      return "Identidade de morador encontrada. Use a senha inicial com os 3 primeiros dígitos do CPF.";
     }
-    return `CPF encontrado como ${profileLabel.toLowerCase()} em ${profile.contexts.length} acessos ativos, distribuídos em ${siteCount} site(s) e ${tenantCount} tenant(s). Entre com a senha para escolher onde abrir o painel.`;
+    return `CPF encontrado como ${profileLabel.toLowerCase()} em ${profile.contexts.length} acessos ativos, distribuídos em ${siteCount} site(s) e ${tenantCount} tenant(s). Use a senha inicial com os 3 primeiros dígitos do CPF.`;
   }
 
   if (profile.contexts.length <= 1) {
@@ -138,7 +138,7 @@ function resolveStageSubtitle(stage: AuthStage) {
   switch (stage) {
     case "lookup": return "Informe seu CPF para identificarmos seu acesso";
     case "profile": return "Seu CPF possui mais de um tipo de acesso disponível";
-    case "login": return "Digite sua senha para continuar";
+    case "login": return "Use a senha inicial para continuar";
     case "register": return "Crie a senha para concluir seu primeiro acesso";
     case "reset": return "Defina uma nova senha para recuperar seu acesso";
     case "context": return "Escolha qual ambiente abrir nesta sessão";
@@ -596,7 +596,7 @@ const AuthPage = () => {
                       ? "Defina a senha do app"
                       : isResetStage
                         ? "Defina a nova senha"
-                        : "Digite sua senha"
+                        : "3 primeiros dígitos do CPF"
                 }
                 className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
               />
@@ -637,14 +637,6 @@ const AuthPage = () => {
                 {isConnecting ? "Entrando..." : "Entrar no app"}
                 <ArrowRight className="h-4 w-4" />
               </Button>
-              <button
-                type="button"
-                className="text-sm text-white/40 transition-colors hover:text-white/70"
-                disabled={isRecovering}
-                onClick={() => void handleForgotPassword()}
-              >
-                {isRecovering ? "Aguarde..." : "Esqueci minha senha"}
-              </button>
             </>
           ) : isRegisterStage ? (
             <>
@@ -786,7 +778,7 @@ const AuthPage = () => {
         >
           <div className="mb-5 flex h-[4.25rem] w-[4.25rem] items-center justify-center rounded-[24px] border border-white/[0.08] bg-white/[0.04] shadow-[0_18px_56px_rgba(0,0,0,0.36)] backdrop-blur-md">
             <img
-              src="/brand-symbol-512.png"
+              src={`${import.meta.env.BASE_URL}brand-symbol-512.png`}
               alt=""
               aria-hidden
               className="h-[3.15rem] w-[3.15rem] object-contain"

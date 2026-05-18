@@ -13,6 +13,10 @@ import { ResidentWebPushBridge } from "@/features/notifications/ResidentWebPushB
 import { ResidentRealtimeBridge } from "@/features/realtime/ResidentRealtimeBridge";
 import { useSession } from "@/features/session/SessionProvider";
 import { AppProviders } from "@/providers/AppProviders";
+import {
+  INCIDENTS_MODULE_KEY,
+  sessionHasModule,
+} from "@/services/mobile-app.service";
 
 const AuthPage = lazy(() => import("@/pages/AuthPage"));
 const BulletinPage = lazy(() => import("@/pages/BulletinPage"));
@@ -69,9 +73,28 @@ const ProtectedShell = () => {
   );
 };
 
+const TenantModuleRoute = ({
+  moduleKey,
+  children,
+}: {
+  moduleKey: string;
+  children: JSX.Element;
+}) => {
+  const { snapshot } = useSession();
+
+  if (!sessionHasModule(snapshot, moduleKey)) {
+    return <Navigate to="/" replace />;
+  }
+
+  return children;
+};
+
 const App = () => (
   <AppProviders>
-    <BrowserRouter>
+    <BrowserRouter
+      basename={import.meta.env.BASE_URL}
+      future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
+    >
       <Suspense fallback={<ScreenLoader />}>
         <Routes>
           <Route path="/auth" element={<AuthRoute />} />
@@ -81,7 +104,18 @@ const App = () => (
             <Route path="/common-areas" element={<CommonAreasPage />} />
             <Route path="/deliveries" element={<DeliveriesPage />} />
             <Route path="/financeiro" element={<FinanceiroPage />} />
-            <Route path="/incidents" element={<IncidentsPage />} />
+            <Route
+              path="/porteiro/incidentes"
+              element={
+                <TenantModuleRoute moduleKey={INCIDENTS_MODULE_KEY}>
+                  <IncidentsPage />
+                </TenantModuleRoute>
+              }
+            />
+            <Route
+              path="/incidents"
+              element={<Navigate to="/porteiro/incidentes" replace />}
+            />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/bulletin" element={<BulletinPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />

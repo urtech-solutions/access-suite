@@ -10,6 +10,7 @@ import {
   type ResidentNotificationScope,
 } from "@/features/notifications/resident-notifications";
 import {
+  INCIDENTS_MODULE_KEY,
   getChatSettings,
   getDeliverySettings,
   getIncidentSettings,
@@ -18,6 +19,7 @@ import {
   listDeliveries,
   listIncidents,
   listVisitors,
+  sessionHasModule,
 } from "@/services/mobile-app.service";
 
 export function useResidentNotificationCenter() {
@@ -41,6 +43,7 @@ export function useResidentNotificationCenter() {
   const [readMap, setReadMap] = useState(() =>
     readNotificationReadMap(notificationScope),
   );
+  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
 
   useEffect(() => {
     setReadMap(readNotificationReadMap(notificationScope));
@@ -85,12 +88,13 @@ export function useResidentNotificationCenter() {
       connectionState,
     ],
     queryFn: () => getIncidentSettings(snapshot, connectionState, resident),
+    enabled: hasIncidentsModule,
   });
 
   const incidentsQuery = useQuery({
-    queryKey: ["incidents", resident.id, snapshot.mode, connectionState],
+    queryKey: ["incidents", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listIncidents(snapshot, connectionState, resident),
-    enabled: incidentSettingsQuery.data?.enabled !== false,
+    enabled: hasIncidentsModule && incidentSettingsQuery.data?.enabled === true,
   });
 
   const bulletinQuery = useQuery({

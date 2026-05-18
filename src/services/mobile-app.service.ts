@@ -25,6 +25,7 @@ import type {
   ResidentAppCredentials,
   ResidentAppLookupResult,
   ResidentAppProfileType,
+  ResidentAppUser,
   ResidentDeviceSession,
   ResidentDeviceSessionList,
   ResidentAppSession,
@@ -41,12 +42,14 @@ const SESSION_KEY = "sv-mobile:session";
 const PREVIEW_STATE_KEY = "sv-mobile:preview-state";
 const PENDING_ACTIONS_KEY = "sv-mobile:pending-actions";
 const CACHE_PREFIX = "sv-mobile:cache:";
+export const INCIDENTS_MODULE_KEY = "INCIDENTS";
 const PRIVATE_HTTP_HOST_PATTERN =
   /^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})$/;
 
 type ResidentAppAuthResponse = {
   access_token: string;
   refresh_token?: string | null;
+  user?: ResidentAppUser | null;
   account_uuid: string;
   cpf_digits: string;
   profile_type: ResidentAppProfileType;
@@ -57,6 +60,7 @@ type ResidentAppAuthResponse = {
 };
 
 type ResidentAppMeResponse = {
+  user?: ResidentAppUser | null;
   account_uuid: string;
   cpf_digits: string;
   profile_type: ResidentAppProfileType;
@@ -304,6 +308,56 @@ function trimValue(value?: string | null) {
   return String(value ?? "").trim();
 }
 
+function normalizeSessionModules(modules?: unknown) {
+  if (!Array.isArray(modules)) {
+    return [] as string[];
+  }
+
+  return Array.from(
+    new Set(
+      modules
+        .map((module) => String(module ?? "").trim().toUpperCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function normalizeResidentAppUser(user?: ResidentAppUser | null) {
+  if (!user) {
+    return null;
+  }
+
+  return {
+    ...user,
+    modules: normalizeSessionModules(user.modules),
+  };
+}
+
+function getPreviewSessionUser(): ResidentAppUser {
+  return {
+    uuid: "preview-user",
+    name: "Preview",
+    modules: [INCIDENTS_MODULE_KEY],
+  };
+}
+
+export function sessionHasModule(
+  snapshot: Pick<SessionSnapshot, "mode" | "user">,
+  moduleKey: string,
+) {
+  if (snapshot.mode === "preview") {
+    return true;
+  }
+
+  const normalizedKey = moduleKey.trim().toUpperCase();
+  return Boolean(
+    normalizedKey &&
+      snapshot.user?.modules?.some(
+        (module) => String(module).trim().toUpperCase() === normalizedKey,
+      ),
+  );
+}
+
 function resolveResidentRole(name: string) {
   return /s[ií]nd/i.test(name) ? "SINDICO" : "MORADOR";
 }
@@ -437,6 +491,7 @@ function createBackendSnapshot(
     apiBaseUrl: normalizeApiBaseUrl(baseUrl),
     token: response.access_token,
     refreshToken: response.refresh_token ?? null,
+    user: normalizeResidentAppUser(response.user),
     residentAuth,
     resident,
   };
@@ -461,6 +516,7 @@ function applySessionIdentity(
 
   const next: SessionSnapshot = {
     ...snapshot,
+    user: normalizeResidentAppUser(response.user) ?? snapshot.user ?? null,
     residentAuth,
     resident,
   };
@@ -473,6 +529,7 @@ export function getDefaultSessionSnapshot(): SessionSnapshot {
     mode: DEFAULT_APP_MODE === "backend" ? "backend" : "preview",
     apiBaseUrl: normalizeApiBaseUrl(DEFAULT_API_BASE_URL),
     resident: demoResidents[0],
+    user: getPreviewSessionUser(),
     residentAuth: null,
     token: null,
     refreshToken: null,
@@ -487,6 +544,10 @@ export function readSessionSnapshot(): SessionSnapshot {
   return {
     ...snapshot,
     apiBaseUrl: normalizeApiBaseUrl(snapshot.apiBaseUrl),
+    user:
+      snapshot.mode === "preview"
+        ? normalizeResidentAppUser(snapshot.user) ?? getPreviewSessionUser()
+        : normalizeResidentAppUser(snapshot.user),
   };
 }
 
@@ -494,6 +555,10 @@ export function saveSessionSnapshot(snapshot: SessionSnapshot) {
   writeStorage(SESSION_KEY, {
     ...snapshot,
     apiBaseUrl: normalizeApiBaseUrl(snapshot.apiBaseUrl),
+    user:
+      snapshot.mode === "preview"
+        ? normalizeResidentAppUser(snapshot.user) ?? getPreviewSessionUser()
+        : normalizeResidentAppUser(snapshot.user),
   });
 }
 
@@ -789,6 +854,20 @@ export async function revokeResidentAppSession(
       method: "POST",
     },
   );
+}
+
+export async function logoutResidentAppSession(snapshot: SessionSnapshot) {
+  if (!snapshot.refreshToken) {
+    return;
+  }
+
+  await requestJson<unknown>("/resident-app-auth/logout", {
+    baseUrl: snapshot.apiBaseUrl,
+    method: "POST",
+    body: {
+      refresh_token: snapshot.refreshToken,
+    },
+  });
 }
 
 export async function getResidentWebPushConfig(baseUrl?: string) {
@@ -1153,12 +1232,33 @@ const previewIncidentTopicLibrary = [
   },
 ];
 
-function incidentCacheKey(resident: ResidentProfile) {
-  return `incidents:${resident.id}`;
+function incidentCacheKey(
+  resident: ResidentProfile,
+  filters: {
+    status?: IncidentEntry["status"] | "all" | null;
+    topicId?: number | string | "all" | null;
+  } = {},
+) {
+  const status = filters.status && filters.status !== "all" ? filters.status : "all";
+  const topic = filters.topicId && filters.topicId !== "all" ? filters.topicId : "all";
+  return `incidents:site:${resident.site_id}:status:${status}:topic:${topic}`;
 }
 
 function incidentSettingsCacheKey(siteId: number) {
   return `incidents-settings:${siteId}`;
+}
+
+function buildQueryString(
+  params: Record<string, string | number | null | undefined>,
+) {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim()) {
+      searchParams.set(key, String(value));
+    }
+  });
+  const serialized = searchParams.toString();
+  return serialized ? `?${serialized}` : "";
 }
 
 function resolveIncidentAttachmentKind(
@@ -1207,6 +1307,7 @@ function getPreviewIncidentTopics(siteId: number): IncidentTopic[] {
 function getPreviewIncidentSettings(siteId: number, siteName: string): IncidentModuleSettings {
   return {
     id: siteId,
+    tenant_uuid: "tenant-demo-condominio",
     site_id: siteId,
     enabled: true,
     site: {
@@ -1231,16 +1332,19 @@ function getIncidentTopicLabel(
 
 function readScopedPreviewIncidents(resident: ResidentProfile) {
   return readPreviewState().incidents.filter((incident) => {
-    if (resident.role === "SINDICO") {
-      return incident.site?.id === resident.site_id;
-    }
-
-    return incident.person?.id === resident.id;
+    return incident.site?.id === resident.site_id;
   });
 }
 
-function writeIncidentCache(resident: ResidentProfile, incidents: IncidentEntry[]) {
-  writeCache(incidentCacheKey(resident), sortIncidents(incidents));
+function writeIncidentCache(
+  resident: ResidentProfile,
+  incidents: IncidentEntry[],
+  filters: {
+    status?: IncidentEntry["status"] | "all" | null;
+    topicId?: number | string | "all" | null;
+  } = {},
+) {
+  writeCache(incidentCacheKey(resident, filters), sortIncidents(incidents));
 }
 
 function upsertPreviewIncident(
@@ -1276,6 +1380,9 @@ export async function getIncidentSettings(
     resident.site_id,
     resident.site_name,
   );
+  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
+    return { ...previewSettings, enabled: false, topics: [] };
+  }
 
   if (!isOnlineBackend(snapshot, connectionState)) {
     return readResidentScopedFallback(
@@ -1286,7 +1393,7 @@ export async function getIncidentSettings(
 
   try {
     const settings = await requestJson<IncidentModuleSettings>(
-      "/resident-app/incidents/settings",
+      `/incidents/settings${buildQueryString({ site_id: resident.site_id })}`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
@@ -1307,23 +1414,33 @@ export async function listIncidentParticipantOptions(
   connectionState: ConnectionState,
   resident: ResidentProfile,
 ) {
-  if (resident.role !== "SINDICO") {
+  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
     return [] as IncidentParticipantOption[];
   }
 
-  const previewOptions = demoResidents
-    .filter(
-      (candidate) =>
-        candidate.site_id === resident.site_id &&
-        candidate.role === "MORADOR" &&
-        candidate.id !== resident.id,
-    )
-    .map((candidate) => ({
-      id: candidate.id,
-      name: candidate.name,
-      photo_url: null,
-      unit_label: candidate.unit_label ?? null,
-    }));
+  const previewOptionMap = new Map<number, IncidentParticipantOption>();
+  demoResidents
+    .filter((candidate) => candidate.site_id === resident.site_id)
+    .forEach((candidate) => {
+      previewOptionMap.set(candidate.id, {
+        id: candidate.id,
+        name: candidate.name,
+        photo_url: null,
+        unit_label: candidate.unit_label ?? null,
+      });
+    });
+  readScopedPreviewIncidents(resident).forEach((incident) => {
+    if (incident.person && !previewOptionMap.has(incident.person.id)) {
+      previewOptionMap.set(incident.person.id, {
+        id: incident.person.id,
+        name: incident.person.name,
+        photo_url: null,
+        unit_label: incident.person.unit_label ?? null,
+      });
+    }
+  });
+  previewOptionMap.delete(resident.id);
+  const previewOptions = Array.from(previewOptionMap.values());
 
   if (!isOnlineBackend(snapshot, connectionState)) {
     return previewOptions;
@@ -1331,16 +1448,15 @@ export async function listIncidentParticipantOptions(
 
   try {
     return await requestJson<IncidentParticipantOption[]>(
-      "/resident-app/incidents/participant-options",
+      `/incidents/participant-options${buildQueryString({
+        site_id: resident.site_id,
+      })}`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
       },
     );
-  } catch (error) {
-    if (snapshot.mode === "backend" && connectionState === "online") {
-      throw error;
-    }
+  } catch {
     return previewOptions;
   }
 }
@@ -1349,29 +1465,53 @@ export async function listIncidents(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
   resident: ResidentProfile,
+  filters: {
+    status?: IncidentEntry["status"] | "all" | null;
+    topicId?: number | string | "all" | null;
+  } = {},
 ) {
-  const previewIncidents = readScopedPreviewIncidents(resident);
+  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
+    return [] as IncidentEntry[];
+  }
+
+  const previewIncidents = readScopedPreviewIncidents(resident).filter((incident) => {
+    if (filters.status && filters.status !== "all" && incident.status !== filters.status) {
+      return false;
+    }
+    if (
+      filters.topicId &&
+      filters.topicId !== "all" &&
+      String(incident.topic?.id ?? "") !== String(filters.topicId)
+    ) {
+      return false;
+    }
+    return true;
+  });
 
   if (!isOnlineBackend(snapshot, connectionState)) {
     return readResidentScopedFallback(
-      incidentCacheKey(resident),
+      incidentCacheKey(resident, filters),
       previewIncidents,
     );
   }
 
   try {
     const incidents = await requestJson<IncidentEntry[]>(
-      "/resident-app/incidents",
+      `/incidents${buildQueryString({
+        site_id: resident.site_id,
+        status: filters.status === "all" ? undefined : filters.status,
+        topic_id: filters.topicId === "all" ? undefined : filters.topicId,
+      })}`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
       },
     );
-    writeIncidentCache(resident, incidents);
+    writeIncidentCache(resident, incidents, filters);
     return incidents;
   } catch {
     return readResidentScopedFallback(
-      incidentCacheKey(resident),
+      incidentCacheKey(resident, filters),
       previewIncidents,
     );
   }
@@ -1383,6 +1523,10 @@ export async function getIncident(
   resident: ResidentProfile,
   incidentId: number,
 ) {
+  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
+    return null;
+  }
+
   const previewIncident =
     readScopedPreviewIncidents(resident).find((incident) => incident.id === incidentId) ??
     readCache<IncidentEntry[]>(incidentCacheKey(resident), []).find(
@@ -1396,12 +1540,15 @@ export async function getIncident(
 
   try {
     const incident = await requestJson<IncidentEntry>(
-      `/resident-app/incidents/${incidentId}`,
+      `/incidents/${incidentId}`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
       },
     );
+    if (incident.site?.id != null && Number(incident.site.id) !== resident.site_id) {
+      return null;
+    }
     writeIncidentCache(
       resident,
       upsertIncidentCollection(
@@ -1575,6 +1722,10 @@ export async function sendIncidentMessage(
   incidentId: number,
   input: SendIncidentMessageInput,
 ) {
+  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
+    throw new Error("O módulo de incidentes não está habilitado para este usuário.");
+  }
+
   const hasContent = Boolean(input.message_text?.trim() || input.attachment);
   if (!hasContent) {
     throw new Error("Escreva uma mensagem ou anexe mídia para registrar a interação.");
@@ -1585,28 +1736,24 @@ export async function sendIncidentMessage(
   }
 
   if (isOnlineBackend(snapshot, connectionState)) {
-    const updated = input.attachment
-      ? await requestForm<IncidentEntry>(`/resident-app/incidents/${incidentId}/messages`, {
-          baseUrl: snapshot.apiBaseUrl,
-          token: snapshot.token,
-          method: "POST",
-          formData: (() => {
-            const formData = new FormData();
-            if (input.message_text?.trim()) {
-              formData.append("message_text", input.message_text.trim());
-            }
-            formData.append("attachment", input.attachment as File);
-            return formData;
-          })(),
-        })
-      : await requestJson<IncidentEntry>(`/resident-app/incidents/${incidentId}/messages`, {
-          baseUrl: snapshot.apiBaseUrl,
-          token: snapshot.token,
-          method: "POST",
-          body: {
-            message_text: input.message_text?.trim(),
-          },
-        });
+    const updated = await requestForm<IncidentEntry>(
+      `/incidents/${incidentId}/messages`,
+      {
+        baseUrl: snapshot.apiBaseUrl,
+        token: snapshot.token,
+        method: "POST",
+        formData: (() => {
+          const formData = new FormData();
+          if (input.message_text?.trim()) {
+            formData.append("message_text", input.message_text.trim());
+          }
+          if (input.attachment) {
+            formData.append("attachment", input.attachment);
+          }
+          return formData;
+        })(),
+      },
+    );
 
     writeIncidentCache(
       resident,
@@ -1672,8 +1819,8 @@ export async function addIncidentParticipant(
   incidentId: number,
   personId: number,
 ) {
-  if (resident.role !== "SINDICO") {
-    throw new Error("Adicionar participantes é uma ação exclusiva do perfil síndico.");
+  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
+    throw new Error("O módulo de incidentes não está habilitado para este usuário.");
   }
 
   if (snapshot.mode === "backend" && !isOnlineBackend(snapshot, connectionState)) {
@@ -1682,7 +1829,7 @@ export async function addIncidentParticipant(
 
   if (isOnlineBackend(snapshot, connectionState)) {
     const updated = await requestJson<IncidentEntry>(
-      `/resident-app/incidents/${incidentId}/participants`,
+      `/incidents/${incidentId}/participants`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
@@ -1705,7 +1852,11 @@ export async function addIncidentParticipant(
     throw new Error("Incidente não encontrado.");
   }
 
-  const participantProfile = demoResidents.find((candidate) => candidate.id === personId);
+  const participantProfile =
+    demoResidents.find((candidate) => candidate.id === personId) ??
+    readScopedPreviewIncidents(resident)
+      .map((candidate) => candidate.person)
+      .find((candidate) => candidate?.id === personId);
   if (!participantProfile) {
     throw new Error("Participante não encontrado.");
   }
@@ -1760,8 +1911,8 @@ export async function updateIncidentStatus(
   incidentId: number,
   status: IncidentEntry["status"],
 ) {
-  if (resident.role !== "SINDICO") {
-    throw new Error("Atualizar status é uma ação exclusiva do perfil síndico.");
+  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
+    throw new Error("O módulo de incidentes não está habilitado para este usuário.");
   }
 
   if (snapshot.mode === "backend" && !isOnlineBackend(snapshot, connectionState)) {
@@ -1770,7 +1921,7 @@ export async function updateIncidentStatus(
 
   if (isOnlineBackend(snapshot, connectionState)) {
     const updated = await requestJson<IncidentEntry>(
-      `/resident-app/incidents/${incidentId}/status`,
+      `/incidents/${incidentId}/status`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,

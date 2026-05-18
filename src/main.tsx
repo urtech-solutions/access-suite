@@ -9,7 +9,9 @@ const canRegisterPwaWorker =
     ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname));
 
 if (canRegisterPwaWorker) {
-  navigator.serviceWorker.register("/push-sw.js").catch(() => undefined);
+  navigator.serviceWorker
+    .register(`${import.meta.env.BASE_URL}push-sw.js`)
+    .catch(() => undefined);
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

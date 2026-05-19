@@ -8,25 +8,19 @@ import {
 import { toast } from "sonner";
 
 import {
-  changeResidentAppPassword,
   connectBackendSession,
   disconnectBackendSession,
   getDefaultSessionSnapshot,
   hydrateBackendSession,
   isBackendAuthenticated,
-  listResidentAppSessions,
   loadBackendResidents,
   lookupResidentAppAccess,
-  logoutResidentAppSession,
   normalizeApiBaseUrl,
   readPendingActions,
   readPreviewState,
   readSessionSnapshot,
-  registerResidentAppSession,
   unregisterResidentPushSubscription,
-  revokeResidentAppSession,
   saveSessionSnapshot,
-  switchResidentBackendContext,
   syncPendingActions,
 } from "@/services/mobile-app.service";
 import {
@@ -35,7 +29,6 @@ import {
 } from "@/lib/web-push";
 import type {
   ConnectionState,
-  ResidentDeviceSession,
   ResidentAppCredentials,
   ResidentAppLookupResult,
   ResidentProfile,
@@ -49,8 +42,6 @@ type SessionContextValue = {
   resident: ResidentProfile;
   connectionState: ConnectionState;
   pendingActionsCount: number;
-  deviceSessions: ResidentDeviceSession[];
-  isLoadingDeviceSessions: boolean;
   isConnecting: boolean;
   isHydratingSession: boolean;
   isAuthenticated: boolean;
@@ -65,19 +56,9 @@ type SessionContextValue = {
     credentials: ResidentAppCredentials,
     baseUrl?: string,
   ) => Promise<SessionSnapshot>;
-  changePassword: (
-    currentPassword: string,
-    password: string,
-  ) => Promise<SessionSnapshot>;
-  registerBackend: (
-    credentials: ResidentAppCredentials,
-    baseUrl?: string,
-  ) => Promise<SessionSnapshot>;
   disconnectBackend: () => void;
   refreshResidents: () => Promise<void>;
   refreshSession: () => Promise<void>;
-  refreshDeviceSessions: () => Promise<void>;
-  revokeDeviceSession: (sessionUuid: string) => Promise<void>;
   syncPending: () => Promise<{ synced: number; failed: number }>;
 };
 
@@ -123,13 +104,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [pendingActionsCount, setPendingActionsCount] = useState(
     readPendingActions().length,
   );
-  const [deviceSessions, setDeviceSessions] = useState<ResidentDeviceSession[]>(
-    () =>
-      snapshot.residentAuth?.current_session
-        ? [snapshot.residentAuth.current_session]
-        : [],
-  );
-  const [isLoadingDeviceSessions, setIsLoadingDeviceSessions] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isHydratingSession, setIsHydratingSession] = useState(
     snapshot.mode === "backend" && Boolean(snapshot.token),
@@ -215,56 +189,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [isHydratingSession, snapshot]);
 
-  useEffect(() => {
-    if (snapshot.mode !== "backend" || !isBackendAuthenticated(snapshot)) {
-      setDeviceSessions([]);
-      return;
-    }
-
-    if (snapshot.residentAuth?.current_session) {
-      setDeviceSessions((current) => {
-        const otherSessions = current.filter(
-          (session) =>
-            session.session_uuid !==
-            snapshot.residentAuth?.current_session?.session_uuid,
-        );
-        return [snapshot.residentAuth.current_session!, ...otherSessions];
-      });
-    }
-  }, [snapshot]);
-
-  useEffect(() => {
-    if (snapshot.mode !== "backend" || !isBackendAuthenticated(snapshot)) {
-      return;
-    }
-
-    let mounted = true;
-    setIsLoadingDeviceSessions(true);
-
-    async function hydrateDeviceSessions() {
-      try {
-        const response = await listResidentAppSessions(snapshot);
-        if (!mounted) return;
-        setDeviceSessions(response.sessions);
-      } catch {
-        if (!mounted) return;
-        if (snapshot.residentAuth?.current_session) {
-          setDeviceSessions([snapshot.residentAuth.current_session]);
-        }
-      } finally {
-        if (mounted) {
-          setIsLoadingDeviceSessions(false);
-        }
-      }
-    }
-
-    void hydrateDeviceSessions();
-
-    return () => {
-      mounted = false;
-    };
-  }, [snapshot]);
-
   const resident = resolveResident(snapshot, residents);
   const isAuthenticated = isBackendAuthenticated(snapshot);
 
@@ -306,9 +230,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   async function switchResident(residentId: number) {
     if (snapshot.mode === "backend" && isAuthenticated) {
-      const next = await switchResidentBackendContext(snapshot, residentId);
-      setSnapshot(next);
-      setResidents(await loadBackendResidents(next));
+      if (snapshot.resident?.id === residentId) {
+        return;
+      }
+      toast.message(
+        "Para trocar de unidade, saia e entre novamente escolhendo outro contexto.",
+      );
       return;
     }
 
@@ -320,10 +247,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   async function lookupAccess(cpf: string, baseUrl?: string) {
-    return lookupResidentAppAccess(
-      cpf,
-      normalizeApiBaseUrl(baseUrl ?? snapshot.apiBaseUrl),
-    );
+    setIsConnecting(true);
+    try {
+      return await lookupResidentAppAccess(
+        cpf,
+        normalizeApiBaseUrl(baseUrl ?? snapshot.apiBaseUrl),
+      );
+    } finally {
+      setIsConnecting(false);
+    }
   }
 
   async function connectBackend(
@@ -352,60 +284,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function registerBackend(
-    credentials: ResidentAppCredentials,
-    baseUrl?: string,
-  ) {
-    setIsConnecting(true);
-    try {
-      const next = await registerResidentAppSession(
-        credentials,
-        normalizeApiBaseUrl(baseUrl ?? snapshot.apiBaseUrl),
-      );
-      setSnapshot(next);
-      setResidents(await loadBackendResidents(next));
-      toast.success("Acesso do app criado com sucesso.");
-      return next;
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message.trim().length > 0
-          ? error.message
-          : "Falha ao criar o acesso no backend.";
-      toast.error(message);
-      throw error;
-    } finally {
-      setIsConnecting(false);
-    }
-  }
-
-  async function changePassword(currentPassword: string, password: string) {
-    if (snapshot.mode !== "backend" || !isAuthenticated) {
-      throw new Error("É preciso estar autenticado no backend para trocar a senha.");
-    }
-
-    setIsConnecting(true);
-    try {
-      const next = await changeResidentAppPassword(
-        snapshot,
-        currentPassword,
-        password,
-      );
-      setSnapshot(next);
-      setResidents(await loadBackendResidents(next));
-      toast.success("Senha atualizada com sucesso.");
-      return next;
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message.trim().length > 0
-          ? error.message
-          : "Não foi possível atualizar a senha.";
-      toast.error(message);
-      throw error;
-    } finally {
-      setIsConnecting(false);
-    }
-  }
-
   function disconnectBackend() {
     const endpoint = readStoredPushEndpoint();
     if (endpoint && snapshot.mode === "backend") {
@@ -413,7 +291,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         () => undefined,
       );
     }
-    void logoutResidentAppSession(snapshot).catch(() => undefined);
     clearStoredPushRegistration();
     const next = buildLoggedOutBackendSnapshot(snapshot);
     setSnapshot(next);
@@ -450,45 +327,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setResidents(await loadBackendResidents(next));
   }
 
-  async function refreshDeviceSessions() {
-    if (snapshot.mode !== "backend" || !isAuthenticated) {
-      setDeviceSessions([]);
-      return;
-    }
-
-    setIsLoadingDeviceSessions(true);
-    try {
-      const response = await listResidentAppSessions(snapshot);
-      setDeviceSessions(response.sessions);
-    } finally {
-      setIsLoadingDeviceSessions(false);
-    }
-  }
-
-  async function revokeDeviceSession(sessionUuid: string) {
-    if (snapshot.mode !== "backend" || !isAuthenticated) {
-      throw new Error("Sessão backend não autenticada.");
-    }
-
-    setIsLoadingDeviceSessions(true);
-    try {
-      await revokeResidentAppSession(snapshot, sessionUuid);
-      setDeviceSessions((current) =>
-        current.filter((session) => session.session_uuid !== sessionUuid),
-      );
-      toast.success("Sessão revogada com sucesso.");
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message.trim().length > 0
-          ? error.message
-          : "Não foi possível revogar a sessão.";
-      toast.error(message);
-      throw error;
-    } finally {
-      setIsLoadingDeviceSessions(false);
-    }
-  }
-
   async function syncPending() {
     const result = await syncPendingActions(snapshot, connectionState);
     setPendingActionsCount(readPendingActions().length);
@@ -509,8 +347,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         resident,
         connectionState,
         pendingActionsCount,
-        deviceSessions,
-        isLoadingDeviceSessions,
         isConnecting,
         isHydratingSession,
         isAuthenticated,
@@ -519,13 +355,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         switchResident,
         lookupAccess,
         connectBackend,
-        changePassword,
-        registerBackend,
         disconnectBackend,
         refreshResidents,
         refreshSession,
-        refreshDeviceSessions,
-        revokeDeviceSession,
         syncPending,
       }}
     >

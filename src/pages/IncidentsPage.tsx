@@ -10,6 +10,7 @@ import {
   ImagePlus,
   Loader2,
   MessageCircleMore,
+  Plus,
   Send,
   ShieldPlus,
   Sparkles,
@@ -20,6 +21,12 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -35,6 +42,7 @@ import { useSession } from "@/features/session/SessionProvider";
 import {
   INCIDENTS_MODULE_KEY,
   addIncidentParticipant,
+  createIncident,
   getIncident,
   getIncidentSettings,
   listIncidentParticipantOptions,
@@ -183,6 +191,11 @@ export default function IncidentsPage() {
   const [messageDraft, setMessageDraft] = useState("");
   const [messageAttachment, setMessageAttachment] = useState<File | null>(null);
   const [selectedParticipantId, setSelectedParticipantId] = useState("");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createTitle, setCreateTitle] = useState("");
+  const [createDescription, setCreateDescription] = useState("");
+  const [createTopicId, setCreateTopicId] = useState("");
+  const [createRequesterPersonId, setCreateRequesterPersonId] = useState("");
 
   const settingsQuery = useQuery({
     queryKey: ["incident-settings", resident.site_id, snapshot.mode, connectionState],
@@ -246,6 +259,20 @@ export default function IncidentsPage() {
       settingsQuery.data?.enabled === true,
   });
 
+  const createRequesterOptionsQuery = useQuery({
+    queryKey: [
+      "incident-create-requester-options",
+      resident.site_id,
+      snapshot.mode,
+      connectionState,
+    ],
+    queryFn: () => listIncidentParticipantOptions(snapshot, connectionState, resident),
+    enabled:
+      createDialogOpen &&
+      hasIncidentsModule &&
+      settingsQuery.data?.enabled === true,
+  });
+
   const selectedIncident =
     incidentDetailQuery.data ??
     filteredIncidents.find((incident) => incident.id === selectedIncidentId) ??
@@ -256,6 +283,16 @@ export default function IncidentsPage() {
     .filter((topic) => topic.active)
     .slice()
     .sort((left, right) => left.sort_order - right.sort_order);
+  const residentPersonId =
+    resident.person_id ?? (resident.role === "SINDICO" ? null : resident.id);
+  const needsRequesterSelection = !residentPersonId || resident.role === "SINDICO";
+  const createRequesterOptions = createRequesterOptionsQuery.data ?? [];
+  const selectedCreateRequester = createRequesterOptions.find(
+    (option) => String(option.id) === createRequesterPersonId,
+  );
+  const resolvedCreateRequesterPersonId = needsRequesterSelection
+    ? Number(createRequesterPersonId || 0)
+    : residentPersonId;
   const participantOptions = (participantOptionsQuery.data ?? []).filter(
     (option) =>
       !(selectedIncident?.participants ?? []).some(
@@ -264,6 +301,68 @@ export default function IncidentsPage() {
           participant.unit_label === (option.unit_label ?? null),
       ),
   );
+  const canCreateIncident =
+    createTitle.trim().length > 0 &&
+    createDescription.trim().length > 0 &&
+    Boolean(createTopicId) &&
+    Boolean(resolvedCreateRequesterPersonId) &&
+    availableTopics.length > 0;
+
+  function resetCreateIncidentForm() {
+    setCreateTitle("");
+    setCreateDescription("");
+    setCreateTopicId("");
+    setCreateRequesterPersonId("");
+  }
+
+  function openCreateDialog() {
+    setCreateTopicId((current) => current || String(availableTopics[0]?.id ?? ""));
+    setCreateRequesterPersonId((current) =>
+      current || (residentPersonId ? String(residentPersonId) : ""),
+    );
+    setCreateDialogOpen(true);
+  }
+
+  const createIncidentMutation = useMutation({
+    mutationFn: () => {
+      const topicId = Number(createTopicId);
+      if (!topicId) {
+        throw new Error("Selecione o tópico do incidente.");
+      }
+      if (!resolvedCreateRequesterPersonId) {
+        throw new Error("Selecione o morador solicitante.");
+      }
+
+      return createIncident(snapshot, connectionState, resident, {
+        site_id: resident.site_id,
+        person_id: resolvedCreateRequesterPersonId,
+        title: createTitle,
+        description: createDescription,
+        topic_id: topicId,
+        requester: selectedCreateRequester ?? {
+          id: resolvedCreateRequesterPersonId,
+          name: resident.name,
+          unit_label: resident.unit_label ?? null,
+        },
+      });
+    },
+    onSuccess: async (incident) => {
+      await queryClient.invalidateQueries({ queryKey: ["incidents"] });
+      queryClient.setQueryData(
+        ["incident-detail", incident.id, resident.site_id, snapshot.mode, connectionState],
+        incident,
+      );
+      setSelectedIncidentId(incident.id);
+      setCreateDialogOpen(false);
+      resetCreateIncidentForm();
+      toast.success("Incidente aberto.");
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Falha ao abrir incidente.",
+      );
+    },
+  });
 
   const sendMessageMutation = useMutation({
     mutationFn: () =>
@@ -654,7 +753,17 @@ export default function IncidentsPage() {
         title="Incidentes"
         subtitle="Fila operacional do site ativo, com timeline, evidências, participantes e histórico de tratamento."
         backTo="/"
-        action={<Badge variant="outline">INCIDENTS</Badge>}
+        action={
+          <Button
+            size="sm"
+            className="shrink-0 rounded-xl"
+            disabled={!hasIncidentsModule || settingsQuery.data?.enabled !== true}
+            onClick={openCreateDialog}
+          >
+            <Plus className="h-4 w-4" />
+            Novo
+          </Button>
+        }
       />
 
       {settingsQuery.isLoading ? (
@@ -844,6 +953,140 @@ export default function IncidentsPage() {
           </section>
         </>
       ) : null}
+
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open) => {
+          setCreateDialogOpen(open);
+          if (!open) {
+            resetCreateIncidentForm();
+          }
+        }}
+      >
+        <DialogContent className="max-h-[92vh] max-w-md overflow-y-auto rounded-[28px]">
+          <DialogHeader>
+            <DialogTitle>Novo incidente</DialogTitle>
+          </DialogHeader>
+
+          <form
+            className="space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (canCreateIncident && !createIncidentMutation.isPending) {
+                createIncidentMutation.mutate();
+              }
+            }}
+          >
+            <div className="space-y-2">
+              <Label>Site</Label>
+              <Input readOnly value={activeSiteName} className="bg-muted/45" />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Solicitante</Label>
+              {needsRequesterSelection ? (
+                <>
+                  <Select
+                    value={createRequesterPersonId}
+                    onValueChange={setCreateRequesterPersonId}
+                    disabled={
+                      createRequesterOptionsQuery.isLoading ||
+                      createRequesterOptions.length === 0
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o morador solicitante" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {createRequesterOptions.map((option) => (
+                        <SelectItem key={option.id} value={String(option.id)}>
+                          {option.name}
+                          {option.unit_label ? ` • ${option.unit_label}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {createRequesterOptionsQuery.isLoading ? (
+                    <p className="text-xs text-muted-foreground">
+                      Carregando moradores do site.
+                    </p>
+                  ) : null}
+                  {!createRequesterOptionsQuery.isLoading &&
+                  createRequesterOptions.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Nenhum morador disponível para informar como solicitante.
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <Input
+                  readOnly
+                  value={`${resident.name}${resident.unit_label ? ` • ${resident.unit_label}` : ""}`}
+                  className="bg-muted/45"
+                />
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>Tópico</Label>
+              <Select
+                value={createTopicId}
+                onValueChange={setCreateTopicId}
+                disabled={availableTopics.length === 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o tópico" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableTopics.map((topic) => (
+                    <SelectItem key={topic.id} value={String(topic.id)}>
+                      {topic.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {availableTopics.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Nenhum tópico ativo disponível para abertura.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="space-y-2">
+              <Label>Título</Label>
+              <Input
+                value={createTitle}
+                maxLength={255}
+                onChange={(event) => setCreateTitle(event.target.value)}
+                placeholder="Ex.: Portão social lento"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Descrição</Label>
+              <Textarea
+                rows={5}
+                value={createDescription}
+                onChange={(event) => setCreateDescription(event.target.value)}
+                placeholder="Descreva o que aconteceu e onde o problema foi percebido."
+              />
+            </div>
+
+            <Button
+              type="submit"
+              className="w-full rounded-[20px]"
+              disabled={!canCreateIncident || createIncidentMutation.isPending}
+            >
+              {createIncidentMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldPlus className="h-4 w-4" />
+              )}
+              Abrir incidente
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -41,6 +41,7 @@ import {
   type BrowserNotificationPermissionState,
 } from "@/lib/browser-notifications";
 import {
+  BULLETIN_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
   getDeliverySettings,
   getIncidentSettings,
@@ -84,6 +85,7 @@ const HomePage = () => {
 
   const canSwitchContext = residents.length > 1;
   const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
 
   async function handleSwitchContext(nextId: number) {
     if (nextId === resident.id) {
@@ -112,8 +114,9 @@ const HomePage = () => {
   });
 
   const bulletinQuery = useQuery({
-    queryKey: ["bulletin", snapshot.mode, connectionState],
-    queryFn: () => listBulletin(snapshot, connectionState),
+    queryKey: ["bulletin", resident.site_id, snapshot.mode, connectionState],
+    queryFn: () => listBulletin(snapshot, connectionState, resident),
+    enabled: hasBulletinModule,
   });
 
   const reservationsQuery = useQuery({
@@ -205,14 +208,18 @@ const HomePage = () => {
           },
         ]
       : []),
-    {
-      icon: Megaphone,
-      label: "Mural",
-      path: "/bulletin",
-      tone: "bg-violet-500/10 text-violet-600",
-      description: "Avisos e notícias",
-      badgeCount: attentionCounts.bulletin,
-    },
+    ...(hasBulletinModule
+      ? [
+          {
+            icon: Megaphone,
+            label: "Mural",
+            path: "/bulletin",
+            tone: "bg-violet-500/10 text-violet-600",
+            description: "Avisos e notícias",
+            badgeCount: attentionCounts.bulletin,
+          },
+        ]
+      : []),
     {
       icon: Wallet,
       label: "Financeiro",

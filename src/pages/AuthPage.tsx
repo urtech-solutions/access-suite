@@ -2,11 +2,8 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
-  Building2,
   ChevronLeft,
-  House,
   KeyRound,
-  LockKeyhole,
   Network,
   Settings2,
   ShieldCheck,
@@ -32,17 +29,12 @@ import {
   countUniqueTenantContexts,
   formatLookupContextMeta,
   formatLookupContextTitle,
-  resolveResidentContextKey,
+  resolveResidentLoginContextKey,
 } from "@/features/session/resident-context";
-import {
-  normalizeApiBaseUrl,
-  requestResidentAppPasswordReset,
-  resetResidentAppPassword,
-} from "@/services/mobile-app.service";
-import type {
-  ResidentAppLookupProfile,
-  ResidentAppProfileType,
-} from "@/services/mobile-app.types";
+import { normalizeApiBaseUrl } from "@/services/mobile-app.service";
+import type { ResidentAppContext } from "@/services/mobile-app.types";
+
+const AUTH_CONTEXT_SELECTION_KEY = "sv-mobile:pending-auth-context-selection";
 
 function maskCpf(value: string) {
   const digits = value.replace(/\D/g, "").slice(0, 11);
@@ -54,13 +46,7 @@ function maskCpf(value: string) {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
 }
 
-type AuthStage =
-  | "lookup"
-  | "profile"
-  | "login"
-  | "register"
-  | "reset"
-  | "context";
+type AuthStage = "login" | "context";
 
 function resolveErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -69,79 +55,21 @@ function resolveErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function resolveProfileLabel(profileType: ResidentAppProfileType) {
-  return profileType === "SYNDIC" ? "Síndico" : "Morador";
-}
-
-function resolveProfileDescription(profileType: ResidentAppProfileType) {
-  return profileType === "SYNDIC"
-    ? "Usa a senha do usuário do Management e abre o painel gerencial do site."
-    : "Usa o acesso liberado no cadastro de pessoas e abre o painel residencial.";
-}
-
-function buildMultiProfileMessage(profiles: ResidentAppLookupProfile[]) {
-  if (profiles.length <= 1) {
-    return "Escolha como deseja entrar no aplicativo.";
-  }
-  return "Este CPF possui mais de um tipo de acesso. Escolha se deseja abrir o painel de morador ou o painel de síndico.";
-}
-
-function buildProfileReadyMessage(profile: ResidentAppLookupProfile) {
-  const tenantCount = countUniqueTenantContexts(profile.contexts);
-  const siteCount = countUniqueSiteContexts(profile.contexts);
-  const profileLabel = resolveProfileLabel(profile.profile_type);
-
-  if (profile.profile_type === "SYNDIC") {
-    if (profile.contexts.length <= 1) {
-      return "CPF encontrado como síndico. Use a mesma senha do portal Management para entrar.";
-    }
-    return `CPF encontrado como síndico em ${siteCount} site(s) e ${tenantCount} tenant(s). Entre com a senha do Management para escolher o painel desejado.`;
-  }
-
-  if (profile.has_password) {
-    if (profile.contexts.length <= 1) {
-      return "Identidade de morador encontrada. Use a senha inicial com os 3 primeiros dígitos do CPF.";
-    }
-    return `CPF encontrado como ${profileLabel.toLowerCase()} em ${profile.contexts.length} acessos ativos, distribuídos em ${siteCount} site(s) e ${tenantCount} tenant(s). Use a senha inicial com os 3 primeiros dígitos do CPF.`;
-  }
-
-  if (profile.contexts.length <= 1) {
-    return "CPF habilitado para o app. Defina sua senha para concluir o primeiro acesso.";
-  }
-
-  return `CPF liberado em ${profile.contexts.length} acessos ativos, com ${siteCount} site(s) e ${tenantCount} tenant(s). Crie uma única senha para vincular todos esses contextos à mesma identidade.`;
-}
-
-function buildContextStageMessage(profileType: ResidentAppProfileType | null) {
-  if (profileType === "SYNDIC") {
-    return "Escolha abaixo qual prédio ou site deseja abrir agora. Você poderá trocar depois pelo card de contexto ativo.";
-  }
-  return "Escolha abaixo qual prédio ou unidade deseja abrir agora. Você poderá mudar depois pelo card de contexto ativo.";
-}
-
-function renderProfileIcon(profileType: ResidentAppProfileType) {
-  return profileType === "SYNDIC" ? Building2 : House;
-}
-
 function resolveStageTitle(stage: AuthStage) {
   switch (stage) {
-    case "lookup": return "Entrar no app";
-    case "profile": return "Escolher painel";
-    case "login": return "Confirmar identidade";
-    case "register": return "Primeiro acesso";
-    case "reset": return "Redefinir senha";
-    case "context": return "Selecionar ambiente";
+    case "login":
+      return "Entrar no app";
+    case "context":
+      return "Selecionar site";
   }
 }
 
 function resolveStageSubtitle(stage: AuthStage) {
   switch (stage) {
-    case "lookup": return "Informe seu CPF para identificarmos seu acesso";
-    case "profile": return "Seu CPF possui mais de um tipo de acesso disponível";
-    case "login": return "Use a senha inicial para continuar";
-    case "register": return "Crie a senha para concluir seu primeiro acesso";
-    case "reset": return "Defina uma nova senha para recuperar seu acesso";
-    case "context": return "Escolha qual ambiente abrir nesta sessão";
+    case "login":
+      return "Informe o CPF para consultar seus vínculos";
+    case "context":
+      return "Escolha o site e confirme a senha desta sessão";
   }
 }
 
@@ -154,8 +82,6 @@ const AuthPage = () => {
     switchMode,
     lookupAccess,
     connectBackend,
-    registerBackend,
-    switchResident,
     isConnecting,
   } = useSession();
 
@@ -164,30 +90,21 @@ const AuthPage = () => {
     return state?.from?.pathname ?? "/";
   }, [location.state]);
 
-  const [stage, setStage] = useState<AuthStage>("lookup");
+  const [stage, setStage] = useState<AuthStage>("login");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [apiBaseUrl, setApiBaseUrlInput] = useState(snapshot.apiBaseUrl);
   const [cpf, setCpf] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [passwordResetToken, setPasswordResetToken] = useState<string | null>(null);
-  const [isRecovering, setIsRecovering] = useState(false);
-  const [lookupMessage, setLookupMessage] = useState("");
-  const [lookupProfiles, setLookupProfiles] = useState<ResidentAppLookupProfile[]>([]);
-  const [selectedProfileType, setSelectedProfileType] =
-    useState<ResidentAppProfileType | null>(null);
+  const [loginMessage, setLoginMessage] = useState("");
+  const [availableContexts, setAvailableContexts] = useState<ResidentAppContext[]>([]);
   const [selectedContextId, setSelectedContextId] = useState<string>("");
 
   const resolvedApiBaseUrl = useMemo(
     () => normalizeApiBaseUrl(apiBaseUrl),
     [apiBaseUrl],
   );
-  const selectedProfile =
-    lookupProfiles.find((profile) => profile.profile_type === selectedProfileType) ??
-    null;
-  const lookupContexts = selectedProfile?.contexts ?? [];
-  const contextTenantCount = countUniqueTenantContexts(lookupContexts);
-  const contextSiteCount = countUniqueSiteContexts(lookupContexts);
+  const contextTenantCount = countUniqueTenantContexts(availableContexts);
+  const contextSiteCount = countUniqueSiteContexts(availableContexts);
 
   function applyApiBaseUrl() {
     const nextApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
@@ -196,268 +113,66 @@ const AuthPage = () => {
     return nextApiBaseUrl;
   }
 
-  function resetToLookup() {
-    setStage("lookup");
+  function resetLogin() {
+    window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
+    setStage("login");
     setPassword("");
-    setConfirmPassword("");
-    setPasswordResetToken(null);
-    setLookupProfiles([]);
-    setSelectedProfileType(null);
+    setLoginMessage("");
+    setAvailableContexts([]);
     setSelectedContextId("");
-    setLookupMessage("");
-  }
-
-  function setProfileContexts(
-    profileType: ResidentAppProfileType,
-    contexts: ResidentAppLookupProfile["contexts"],
-  ) {
-    setLookupProfiles((current) =>
-      current.map((profile) =>
-        profile.profile_type === profileType ? { ...profile, contexts } : profile,
-      ),
-    );
-  }
-
-  function activateProfile(profile: ResidentAppLookupProfile) {
-    setSelectedProfileType(profile.profile_type);
-    setSelectedContextId(
-      profile.contexts[0] ? String(resolveResidentContextKey(profile.contexts[0])) : "",
-    );
-    setPassword("");
-    setConfirmPassword("");
-    setLookupMessage(buildProfileReadyMessage(profile));
-
-    if (profile.profile_type === "SYNDIC" || profile.has_password) {
-      setStage("login");
-      return;
-    }
-
-    setStage("register");
   }
 
   async function handleLookup() {
     const nextApiBaseUrl = applyApiBaseUrl();
-    setLookupMessage("");
+    setLoginMessage("");
 
     try {
-      const result = await lookupAccess(cpf, nextApiBaseUrl);
-      const availableProfiles = result.available_profiles.filter(
-        (profile) => profile.eligible && profile.contexts.length > 0,
-      );
+      window.sessionStorage.setItem(AUTH_CONTEXT_SELECTION_KEY, "1");
+      const lookup = await lookupAccess(cpf, nextApiBaseUrl);
+      const contexts = lookup.contexts ?? [];
 
-      if (!result.eligible || availableProfiles.length === 0) {
-        resetToLookup();
-        setLookupMessage(
-          "Este CPF ainda não foi liberado para o app. Peça à gestão para ativar o uso do aplicativo no cadastro correspondente.",
+      if (!lookup.eligible || contexts.length === 0) {
+        window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
+        setLoginMessage(
+          "Nenhum cadastro ativo foi encontrado para este CPF.",
         );
         return;
       }
 
-      setLookupProfiles(availableProfiles);
-
-      if (availableProfiles.length === 1) {
-        activateProfile(availableProfiles[0]);
-        return;
-      }
-
-      setSelectedProfileType(null);
-      setSelectedContextId("");
-      setStage("profile");
-      setLookupMessage(buildMultiProfileMessage(availableProfiles));
+      setAvailableContexts(contexts);
+      setSelectedContextId(resolveResidentLoginContextKey(contexts[0]));
+      setStage("context");
+      setLoginMessage("Selecione o site que deseja acessar agora.");
     } catch (error) {
-      resetToLookup();
-      setLookupMessage(
-        resolveErrorMessage(error, "Não foi possível verificar o CPF no backend."),
-      );
-    }
-  }
-
-  async function handleLogin() {
-    const nextApiBaseUrl = applyApiBaseUrl();
-    setLookupMessage("");
-
-    if (!selectedProfileType) {
-      setLookupMessage("Escolha primeiro se deseja entrar como morador ou síndico.");
-      setStage("profile");
-      return;
-    }
-
-    try {
-      const next = await connectBackend(
-        { cpf, password, profile_type: selectedProfileType },
-        nextApiBaseUrl,
-      );
-      const contexts = next.residentAuth?.contexts ?? [];
-      const activeContext = next.residentAuth?.active_context;
-
-      setProfileContexts(selectedProfileType, contexts);
-
-      if (contexts.length > 1) {
-        setSelectedContextId(
-          String(
-            activeContext
-              ? resolveResidentContextKey(activeContext)
-              : resolveResidentContextKey(contexts[0]),
-          ),
-        );
-        setLookupMessage(buildContextStageMessage(selectedProfileType));
-        setStage("context");
-        return;
-      }
-
-      navigate(returnTo, { replace: true });
-    } catch (error) {
-      setLookupMessage(
-        resolveErrorMessage(error, "Não foi possível autenticar este CPF."),
-      );
-    }
-  }
-
-  async function handleRegister() {
-    if (password !== confirmPassword) {
-      setLookupMessage("A confirmação de senha precisa ser igual à senha.");
-      return;
-    }
-
-    if (!selectedProfileType) {
-      setLookupMessage("Escolha primeiro o perfil que deseja usar no app.");
-      setStage("profile");
-      return;
-    }
-
-    if (selectedProfileType === "SYNDIC") {
-      setLookupMessage(
-        "O perfil de síndico usa a mesma senha do portal Management e não precisa de cadastro inicial no app.",
-      );
-      setStage("login");
-      return;
-    }
-
-    const nextApiBaseUrl = applyApiBaseUrl();
-    setLookupMessage("");
-
-    try {
-      const next = await registerBackend(
-        { cpf, password, profile_type: selectedProfileType },
-        nextApiBaseUrl,
-      );
-      const contexts = next.residentAuth?.contexts ?? [];
-      const activeContext = next.residentAuth?.active_context;
-
-      setProfileContexts(selectedProfileType, contexts);
-
-      if (contexts.length > 1) {
-        setSelectedContextId(
-          String(
-            activeContext
-              ? resolveResidentContextKey(activeContext)
-              : resolveResidentContextKey(contexts[0]),
-          ),
-        );
-        setLookupMessage(
-          "Sua identidade foi criada. Agora escolha o prédio ou unidade que deseja abrir nesta sessão.",
-        );
-        setStage("context");
-        return;
-      }
-
-      navigate(returnTo, { replace: true });
-    } catch (error) {
-      setLookupMessage(
-        resolveErrorMessage(error, "Não foi possível criar o acesso inicial deste CPF."),
+      window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
+      setLoginMessage(
+        resolveErrorMessage(error, "Não foi possível consultar este CPF."),
       );
     }
   }
 
   async function handleContextContinue() {
     if (!selectedContextId) {
-      setLookupMessage("Selecione o contexto que deseja usar nesta sessão.");
+      setLoginMessage("Selecione um site para continuar.");
       return;
     }
 
     try {
-      await switchResident(Number(selectedContextId));
+      await connectBackend(
+        {
+          context_key: selectedContextId,
+          cpf,
+          password,
+          profile_type: "RESIDENT",
+        },
+        resolvedApiBaseUrl,
+      );
+      window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
       navigate(returnTo, { replace: true });
     } catch (error) {
-      setLookupMessage(
-        resolveErrorMessage(error, "Não foi possível ativar o contexto selecionado."),
+      setLoginMessage(
+        resolveErrorMessage(error, "Não foi possível ativar o site selecionado."),
       );
-    }
-  }
-
-  async function handleForgotPassword() {
-    if (!selectedProfileType) {
-      setLookupMessage("Escolha primeiro o perfil que deseja recuperar.");
-      setStage("profile");
-      return;
-    }
-
-    const nextApiBaseUrl = applyApiBaseUrl();
-    setLookupMessage("");
-    setIsRecovering(true);
-
-    try {
-      const result = await requestResidentAppPasswordReset(
-        cpf,
-        selectedProfileType,
-        nextApiBaseUrl,
-      );
-
-      if (!result.reset_token) {
-        setLookupMessage(result.message);
-        return;
-      }
-
-      setPassword("");
-      setConfirmPassword("");
-      setPasswordResetToken(result.reset_token);
-      setStage("reset");
-      setLookupMessage(
-        selectedProfileType === "SYNDIC"
-          ? "Token de redefinição emitido. Defina a nova senha que também valerá para o portal Management."
-          : "Token de redefinição emitido. Defina a nova senha do app para este CPF.",
-      );
-    } catch (error) {
-      setLookupMessage(
-        resolveErrorMessage(error, "Não foi possível iniciar a recuperação de senha."),
-      );
-    } finally {
-      setIsRecovering(false);
-    }
-  }
-
-  async function handleResetPassword() {
-    if (password !== confirmPassword) {
-      setLookupMessage("A confirmação de senha precisa ser igual à senha.");
-      return;
-    }
-
-    if (!passwordResetToken) {
-      setLookupMessage("O token de redefinição não está disponível nesta sessão.");
-      return;
-    }
-
-    const nextApiBaseUrl = applyApiBaseUrl();
-    setLookupMessage("");
-    setIsRecovering(true);
-
-    try {
-      await resetResidentAppPassword(password, passwordResetToken, nextApiBaseUrl);
-      setPassword("");
-      setConfirmPassword("");
-      setPasswordResetToken(null);
-      setStage("login");
-      setLookupMessage(
-        selectedProfileType === "SYNDIC"
-          ? "Senha redefinida. Entre novamente com a nova senha do Management."
-          : "Senha redefinida. Entre novamente com a nova senha do app.",
-      );
-    } catch (error) {
-      setLookupMessage(
-        resolveErrorMessage(error, "Não foi possível redefinir a senha deste CPF."),
-      );
-    } finally {
-      setIsRecovering(false);
     }
   }
 
@@ -467,106 +182,9 @@ const AuthPage = () => {
     navigate("/", { replace: true });
   }
 
-  function renderSelectedProfileBadge() {
-    if (!selectedProfileType || stage === "lookup" || stage === "profile") {
-      return null;
-    }
-
-    const Icon = renderProfileIcon(selectedProfileType);
-
-    return (
-      <div className="mb-4 flex items-center gap-2 rounded-[14px] border border-white/[0.08] bg-white/[0.05] px-3 py-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded-[10px] bg-amber-400/15 text-amber-400">
-          <Icon className="h-3.5 w-3.5" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold text-white/90">
-            {resolveProfileLabel(selectedProfileType)}
-          </p>
-          <p className="truncate text-[10px] text-white/40">
-            {resolveProfileDescription(selectedProfileType)}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="ml-auto shrink-0 text-[10px] text-white/30 hover:text-white/60"
-          onClick={resetToLookup}
-        >
-          trocar
-        </button>
-      </div>
-    );
-  }
-
-  function renderProfileSelection() {
-    return (
-      <div className="mt-4 flex flex-1 flex-col gap-3">
-        {lookupProfiles.map((profile, index) => {
-          const Icon = renderProfileIcon(profile.profile_type);
-          const tenantCount = countUniqueTenantContexts(profile.contexts);
-          const siteCount = countUniqueSiteContexts(profile.contexts);
-          const firstAccess = profile.profile_type === "RESIDENT" && !profile.has_password;
-
-          return (
-            <motion.button
-              key={profile.profile_type}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.04 }}
-              type="button"
-              onClick={() => activateProfile(profile)}
-              className="w-full rounded-[20px] border border-white/[0.08] bg-white/[0.05] p-4 text-left transition-all hover:border-amber-400/30 hover:bg-white/[0.08]"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-amber-400/15 text-amber-400">
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-white">
-                        {profile.label}
-                      </p>
-                      <p className="mt-0.5 text-xs text-white/45">
-                        {siteCount} site(s) · {tenantCount} tenant(s)
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                <span
-                  className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold ${
-                    firstAccess
-                      ? "bg-amber-400/15 text-amber-400"
-                      : "bg-white/10 text-white/60"
-                  }`}
-                >
-                  {firstAccess ? "Criar senha" : "Entrar"}
-                </span>
-              </div>
-            </motion.button>
-          );
-        })}
-
-        <button
-          type="button"
-          className="mt-2 text-sm text-white/30 transition-colors hover:text-white/60"
-          onClick={resetToLookup}
-        >
-          Consultar outro CPF
-        </button>
-      </div>
-    );
-  }
-
-  function renderLookupOrCredentialStage() {
-    const isLoginStage = stage === "login";
-    const isRegisterStage = stage === "register";
-    const isResetStage = stage === "reset";
-
+  function renderCredentialStage() {
     return (
       <div className="mt-4 flex flex-1 flex-col gap-4">
-        {renderSelectedProfileBadge()}
-
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-xs font-medium text-white/50">CPF</Label>
@@ -576,106 +194,20 @@ const AuthPage = () => {
               placeholder="000.000.000-00"
               className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
               inputMode="numeric"
-              disabled={stage !== "lookup"}
             />
           </div>
-
-          {(isLoginStage || isRegisterStage || isResetStage) && (
-            <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-white/50">
-                {isRegisterStage ? "Crie sua senha" : isResetStage ? "Nova senha" : "Senha"}
-              </Label>
-              <Input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder={
-                  selectedProfileType === "SYNDIC"
-                    ? "Senha do portal Management"
-                    : isRegisterStage
-                      ? "Defina a senha do app"
-                      : isResetStage
-                        ? "Defina a nova senha"
-                        : "3 primeiros dígitos do CPF"
-                }
-                className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
-              />
-            </div>
-          )}
-
-          {(isRegisterStage || isResetStage) && (
-            <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-white/50">Confirmar senha</Label>
-              <Input
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                placeholder="Repita a senha"
-                className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
-              />
-            </div>
-          )}
         </div>
 
-        <div className="flex flex-col gap-2.5 pt-1">
-          {stage === "lookup" ? (
-            <Button
-              className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
-              disabled={cpf.replace(/\D/g, "").length !== 11 || isConnecting}
-              onClick={() => void handleLookup()}
-            >
-              {isConnecting ? "Verificando..." : "Continuar"}
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          ) : isLoginStage ? (
-            <>
-              <Button
-                className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
-                disabled={!password.trim() || isConnecting}
-                onClick={() => void handleLogin()}
-              >
-                {isConnecting ? "Entrando..." : "Entrar no app"}
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-            </>
-          ) : isRegisterStage ? (
-            <>
-              <Button
-                className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
-                disabled={!password.trim() || !confirmPassword.trim() || isConnecting}
-                onClick={() => void handleRegister()}
-              >
-                {isConnecting ? "Criando acesso..." : "Criar senha do app"}
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-              <button
-                type="button"
-                className="text-sm text-white/40 transition-colors hover:text-white/70"
-                onClick={resetToLookup}
-              >
-                Voltar para o CPF
-              </button>
-            </>
-          ) : (
-            <>
-              <Button
-                className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
-                disabled={!password.trim() || !confirmPassword.trim() || isRecovering}
-                onClick={() => void handleResetPassword()}
-              >
-                {isRecovering ? "Redefinindo..." : "Salvar nova senha"}
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-              <button
-                type="button"
-                className="text-sm text-white/40 transition-colors hover:text-white/70"
-                onClick={() => setStage("login")}
-              >
-                Voltar para o login
-              </button>
-            </>
-          )}
-        </div>
+        <Button
+          className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
+          disabled={
+            cpf.replace(/\D/g, "").length !== 11 || isConnecting
+          }
+          onClick={() => void handleLookup()}
+        >
+          {isConnecting ? "Consultando..." : "Consultar CPF"}
+          <ArrowRight className="h-4 w-4" />
+        </Button>
       </div>
     );
   }
@@ -686,7 +218,7 @@ const AuthPage = () => {
         <div className="rounded-[16px] border border-white/[0.08] bg-white/[0.04] px-4 py-3">
           <div className="flex flex-wrap gap-2">
             <span className="rounded-full bg-blue-500/15 px-2.5 py-1 text-[10px] font-semibold text-blue-400">
-              {lookupContexts.length} contextos
+              {availableContexts.length} vínculo(s)
             </span>
             <span className="rounded-full bg-white/8 px-2.5 py-1 text-[10px] font-semibold text-white/50">
               {contextSiteCount} site(s)
@@ -695,23 +227,18 @@ const AuthPage = () => {
               {contextTenantCount} tenant(s)
             </span>
           </div>
-          <p className="mt-2 text-xs text-white/45">
-            {selectedProfileType === "SYNDIC"
-              ? "Seu CPF possui mais de um site ativo como síndico."
-              : "Seu CPF foi liberado em múltiplas residências."}
-          </p>
         </div>
 
         <div className="flex-1 space-y-2">
-          {lookupContexts.map((context) => {
-            const contextId = resolveResidentContextKey(context);
-            const selected = String(contextId) === selectedContextId;
+          {availableContexts.map((context) => {
+            const contextId = resolveResidentLoginContextKey(context);
+            const selected = contextId === selectedContextId;
 
             return (
               <button
-                key={`${context.profile_type}-${context.tenant_uuid}-${contextId}`}
+                key={contextId}
                 type="button"
-                onClick={() => setSelectedContextId(String(contextId))}
+                onClick={() => setSelectedContextId(contextId)}
                 className={`w-full rounded-[18px] border p-4 text-left transition-all ${
                   selected
                     ? "border-amber-400/50 bg-amber-400/10 shadow-sm shadow-amber-400/10"
@@ -738,20 +265,31 @@ const AuthPage = () => {
           })}
         </div>
 
+        <div className="space-y-1.5">
+          <Label className="text-xs font-medium text-white/50">Senha</Label>
+          <Input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Digite sua senha"
+            className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
+          />
+        </div>
+
         <Button
           className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
-          disabled={!selectedContextId || isConnecting}
+          disabled={!selectedContextId || !password.trim() || isConnecting}
           onClick={() => void handleContextContinue()}
         >
-          Abrir este ambiente
+          {isConnecting ? "Entrando..." : "Entrar neste site"}
           <ArrowRight className="h-4 w-4" />
         </Button>
         <button
           type="button"
           className="text-sm text-white/30 transition-colors hover:text-white/60"
-          onClick={resetToLookup}
+          onClick={resetLogin}
         >
-          Voltar ao CPF
+          Usar outro CPF
         </button>
       </div>
     );
@@ -762,7 +300,6 @@ const AuthPage = () => {
       className="relative flex min-h-screen flex-col overflow-hidden"
       style={{ background: "linear-gradient(160deg, #080c18 0%, #0f172a 55%, #130e22 100%)" }}
     >
-      {/* Ambient glows */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -top-24 right-[-6rem] h-[28rem] w-[28rem] rounded-full bg-[radial-gradient(circle,rgba(250,204,21,0.09),transparent_55%)]" />
         <div className="absolute bottom-[-8rem] left-[-6rem] h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(30,64,175,0.10),transparent_55%)]" />
@@ -770,7 +307,6 @@ const AuthPage = () => {
       </div>
 
       <div className="relative flex flex-1 flex-col items-center px-5 pb-12">
-        {/* Brand */}
         <motion.div
           initial={{ opacity: 0, y: -16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -792,7 +328,6 @@ const AuthPage = () => {
           </p>
         </motion.div>
 
-        {/* Main card */}
         <motion.div
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
@@ -800,7 +335,6 @@ const AuthPage = () => {
           className="w-full max-w-sm"
         >
           <div className="rounded-[28px] border border-white/[0.08] bg-white/[0.05] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.50)] backdrop-blur-xl">
-            {/* Stage nav */}
             <AnimatePresence mode="wait">
               <motion.div
                 key={stage}
@@ -811,20 +345,10 @@ const AuthPage = () => {
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    {stage !== "lookup" && (
+                    {stage === "context" && (
                       <button
                         type="button"
-                        onClick={
-                          stage === "login" || stage === "register"
-                            ? lookupProfiles.length > 1
-                              ? () => setStage("profile")
-                              : resetToLookup
-                            : stage === "reset"
-                              ? () => setStage("login")
-                              : stage === "context"
-                                ? () => setStage("profile")
-                                : resetToLookup
-                        }
+                        onClick={resetLogin}
                         className="mb-3 flex items-center gap-1 text-xs text-white/35 transition-colors hover:text-white/70"
                       >
                         <ChevronLeft className="h-3.5 w-3.5" />
@@ -841,36 +365,27 @@ const AuthPage = () => {
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-white/[0.07] text-white/50">
                     {stage === "context" ? (
                       <Network className="h-4.5 w-4.5" />
-                    ) : stage === "register" || stage === "reset" ? (
-                      <LockKeyhole className="h-4.5 w-4.5" />
-                    ) : stage === "login" ? (
-                      <KeyRound className="h-4.5 w-4.5" />
                     ) : (
-                      <ShieldCheck className="h-4.5 w-4.5" />
+                      <KeyRound className="h-4.5 w-4.5" />
                     )}
                   </div>
                 </div>
 
-                {/* Inline message */}
-                {lookupMessage && (
+                {loginMessage && (
                   <div className="mt-4 rounded-[14px] border border-white/[0.07] bg-white/[0.04] px-4 py-3">
                     <p className="text-[0.8125rem] leading-relaxed text-white/60">
-                      {lookupMessage}
+                      {loginMessage}
                     </p>
                   </div>
                 )}
 
-                {/* Stage content */}
-                {stage === "profile"
-                  ? renderProfileSelection()
-                  : stage === "context"
-                    ? renderContextSelection()
-                    : renderLookupOrCredentialStage()}
+                {stage === "context"
+                  ? renderContextSelection()
+                  : renderCredentialStage()}
               </motion.div>
             </AnimatePresence>
           </div>
 
-          {/* Advanced options link */}
           <div className="mt-6 flex justify-center">
             <button
               type="button"
@@ -884,7 +399,6 @@ const AuthPage = () => {
         </motion.div>
       </div>
 
-      {/* Advanced options sheet */}
       <Sheet open={advancedOpen} onOpenChange={setAdvancedOpen}>
         <SheetContent
           side="bottom"

@@ -156,8 +156,9 @@ Verifique:
 
 ## Fluxo esperado do backend
 
-- `lookup` do CPF no endpoint `resident-app-auth/lookup`;
-- `register` ou `login` em `resident-app-auth`;
+- `lookup` do CPF no endpoint `auth/person-app/lookup`;
+- `login` por CPF, senha e contexto em `auth/person-app/login`;
+- revalidacao da sessao em `auth/person-app/me`;
 - selecao de contexto quando houver mais de uma unidade;
 - consumo dos endpoints do app:
   - `resident-app/visitors`

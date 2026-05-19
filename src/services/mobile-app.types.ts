@@ -39,6 +39,7 @@ export type PendingActionType =
 
 export interface ResidentAppCredentials {
   cpf: string;
+  context_key: string;
   password: string;
   profile_type?: ResidentAppProfileType;
 }
@@ -61,6 +62,7 @@ export interface ResidentAppLookupResult {
 }
 
 export interface ResidentAppContext {
+  context_key?: string;
   profile_type: ResidentAppProfileType;
   person_id: number | null;
   user_uuid: string | null;
@@ -97,11 +99,6 @@ export interface ResidentDeviceSession {
   created_at: string;
   last_used_at: string;
   expires_at: string;
-}
-
-export interface ResidentDeviceSessionList {
-  current_session_uuid?: string | null;
-  sessions: ResidentDeviceSession[];
 }
 
 export interface ResidentAppUser {
@@ -339,7 +336,14 @@ export interface BulletinPost {
   } | null;
 }
 
+export interface BulletinModuleStatus {
+  enabled: boolean;
+  module: "BULLETIN" | string;
+  tenant_uuid: string;
+}
+
 export interface CreateBulletinInput {
+  site_id?: number;
   title: string;
   content: string;
   tag?: BulletinTag;
@@ -547,8 +551,15 @@ export interface CreateVisitorInput {
 export interface CreateIncidentInput {
   title: string;
   description: string;
+  site_id?: number | null;
+  person_id?: number | null;
   topic_id: number;
   attachment?: File | null;
+  requester?: {
+    id: number;
+    name: string;
+    unit_label?: string | null;
+  } | null;
 }
 
 export interface SendIncidentMessageInput {

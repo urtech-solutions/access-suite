@@ -55,7 +55,7 @@ Suites confirmadas nesta rodada:
 - `user.service.spec.ts`
 - `external-events.registration.service.spec.ts`
 - `external-events.service.spec.ts`
-- `resident-app-auth.service.spec.ts`
+- `person-app-auth.service.spec.ts`
 - `persons.service.spec.ts`
 - `external-events-access-timing.service.spec.ts`
 - `common-areas.service.spec.ts`

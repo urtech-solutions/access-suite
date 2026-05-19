@@ -5,11 +5,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
-  KeyRound,
   LogOut,
   RefreshCw,
   ShieldCheck,
-  Smartphone,
   UserRound,
   X,
 } from "lucide-react";
@@ -81,20 +79,14 @@ const ProfilePage = () => {
     resident,
     residents,
     snapshot,
-    deviceSessions,
-    isLoadingDeviceSessions,
     isAuthenticated,
     isHydratingSession,
-    isConnecting,
     setApiBaseUrl,
     switchMode,
     switchResident,
-    changePassword,
     disconnectBackend,
     refreshResidents,
     refreshSession,
-    refreshDeviceSessions,
-    revokeDeviceSession,
     syncPending,
   } = useSession();
 
@@ -104,20 +96,10 @@ const ProfilePage = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [apiBaseUrl, setApiBaseUrlInput] = useState(snapshot.apiBaseUrl);
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [nextPassword, setNextPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [passwordSheetOpen, setPasswordSheetOpen] = useState(false);
-  const [sessionsSheetOpen, setSessionsSheetOpen] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
 
   const isSyndic = resident.role === "SINDICO";
   const contextLabel = isSyndic ? "Condomínio ativo" : "Minha residência";
-  const passwordLabel = isSyndic
-    ? "Senha do síndico / Management"
-    : "Senha do app";
-  const currentSessionUuid =
-    snapshot.residentAuth?.current_session?.session_uuid ?? null;
 
   async function handleAvatarChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -144,23 +126,6 @@ const ProfilePage = () => {
     setAvatarDataUrl(null);
   }
 
-  function formatSessionStamp(value?: string | null) {
-    if (!value) return "Sem registro";
-    return new Intl.DateTimeFormat("pt-BR", {
-      dateStyle: "short",
-      timeStyle: "short",
-    }).format(new Date(value));
-  }
-
-  function describeSessionDevice(session: (typeof deviceSessions)[number]) {
-    return (
-      session.device_name ||
-      session.device_platform ||
-      session.user_agent ||
-      "Dispositivo identificado"
-    );
-  }
-
   function applyApiBaseUrl() {
     const nextApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
     setApiBaseUrlInput(nextApiBaseUrl);
@@ -176,19 +141,6 @@ const ProfilePage = () => {
     await refreshSession();
     await refreshResidents();
     queryClient.invalidateQueries();
-  }
-
-  async function handleChangePassword() {
-    if (nextPassword !== confirmPassword) {
-      toast.error("A confirmação da nova senha precisa ser igual à senha.");
-      return;
-    }
-    await changePassword(currentPassword, nextPassword);
-    setCurrentPassword("");
-    setNextPassword("");
-    setConfirmPassword("");
-    setPasswordSheetOpen(false);
-    toast.success("Senha atualizada com sucesso.");
   }
 
   return (
@@ -336,43 +288,6 @@ const ProfilePage = () => {
             Conta
           </p>
 
-          {snapshot.mode === "backend" && isAuthenticated && (
-            <>
-              <button
-                onClick={() => setPasswordSheetOpen(true)}
-                className="flex w-full items-center gap-3 border-b border-border/40 px-4 py-3.5 text-left transition-colors hover:bg-muted/30"
-              >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-primary/10 text-primary">
-                  <KeyRound className="h-4 w-4" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-foreground">Alterar senha</p>
-                  <p className="text-xs text-muted-foreground">{passwordLabel}</p>
-                </div>
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              </button>
-
-              <button
-                onClick={() => {
-                  void refreshDeviceSessions();
-                  setSessionsSheetOpen(true);
-                }}
-                className="flex w-full items-center gap-3 border-b border-border/40 px-4 py-3.5 text-left transition-colors hover:bg-muted/30"
-              >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-secondary text-secondary-foreground">
-                  <Smartphone className="h-4 w-4" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-foreground">Sessões ativas</p>
-                  <p className="text-xs text-muted-foreground">
-                    {deviceSessions.length} dispositivo(s) conectado(s)
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              </button>
-            </>
-          )}
-
           <button
             onClick={() => setSettingsSheetOpen(true)}
             className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/30"
@@ -413,172 +328,6 @@ const ProfilePage = () => {
           )}
         </div>
       </div>
-
-      {/* Password sheet */}
-      <Sheet open={passwordSheetOpen} onOpenChange={setPasswordSheetOpen}>
-        <SheetContent
-          side="bottom"
-          className="mx-auto w-full max-w-md rounded-t-[28px] px-5 pb-8 pt-5"
-        >
-          <SheetHeader className="mb-5 flex-row items-center justify-between text-left">
-            <SheetTitle>Alterar senha</SheetTitle>
-            <button
-              onClick={() => setPasswordSheetOpen(false)}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </SheetHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Senha atual</Label>
-              <Input
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder={passwordLabel}
-                className="h-12 rounded-[16px]"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Nova senha</Label>
-              <Input
-                type="password"
-                value={nextPassword}
-                onChange={(e) => setNextPassword(e.target.value)}
-                placeholder="Defina a nova senha"
-                className="h-12 rounded-[16px]"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Confirmar nova senha</Label>
-              <Input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Repita a nova senha"
-                className="h-12 rounded-[16px]"
-              />
-            </div>
-            <Button
-              variant="accent"
-              className="mt-2 h-12 w-full rounded-[16px]"
-              disabled={
-                !currentPassword.trim() ||
-                !nextPassword.trim() ||
-                !confirmPassword.trim() ||
-                isConnecting
-              }
-              onClick={() => void handleChangePassword()}
-            >
-              <KeyRound className="h-4 w-4" />
-              {isConnecting ? "Atualizando..." : "Salvar nova senha"}
-            </Button>
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      {/* Sessions sheet */}
-      <Sheet open={sessionsSheetOpen} onOpenChange={setSessionsSheetOpen}>
-        <SheetContent
-          side="bottom"
-          className="mx-auto w-full max-w-md rounded-t-[28px] px-5 pb-8 pt-5"
-        >
-          <SheetHeader className="mb-1 flex-row items-center justify-between text-left">
-            <SheetTitle>Sessões ativas</SheetTitle>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 rounded-full px-3 text-xs"
-                disabled={isLoadingDeviceSessions}
-                onClick={() => void refreshDeviceSessions()}
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                Atualizar
-              </Button>
-              <button
-                onClick={() => setSessionsSheetOpen(false)}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </SheetHeader>
-          <p className="mb-4 text-xs text-muted-foreground">
-            {deviceSessions.length} sessão(ões) carregada(s).
-          </p>
-          <div className="max-h-[60vh] space-y-3 overflow-y-auto">
-            {deviceSessions.length === 0 ? (
-              <div className="rounded-[18px] border border-dashed border-border/70 bg-muted/30 p-4 text-center text-sm text-muted-foreground">
-                Nenhuma sessão ativa retornada pela API.
-              </div>
-            ) : (
-              deviceSessions.map((session) => {
-                const isCurrent = session.session_uuid === currentSessionUuid;
-                return (
-                  <div
-                    key={session.session_uuid}
-                    className="rounded-[18px] border border-border/70 bg-muted/35 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-foreground">
-                            {describeSessionDevice(session)}
-                          </p>
-                          <Badge
-                            variant={isCurrent ? "success" : "outline"}
-                            className="rounded-full text-[10px]"
-                          >
-                            {isCurrent ? "Este dispositivo" : "Remota"}
-                          </Badge>
-                        </div>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {session.active_context?.context_label ??
-                            "Sem contexto identificado"}
-                        </p>
-                      </div>
-                      {!isCurrent && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="shrink-0 rounded-full"
-                          disabled={isLoadingDeviceSessions}
-                          onClick={() => void revokeDeviceSession(session.session_uuid)}
-                        >
-                          <LogOut className="h-3.5 w-3.5" />
-                          Revogar
-                        </Button>
-                      )}
-                    </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-                      <div>
-                        <p className="uppercase tracking-[0.15em]">Último uso</p>
-                        <p className="mt-1 text-foreground">
-                          {formatSessionStamp(session.last_used_at)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="uppercase tracking-[0.15em]">Expira</p>
-                        <p className="mt-1 text-foreground">
-                          {formatSessionStamp(session.expires_at)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="uppercase tracking-[0.15em]">Criada</p>
-                        <p className="mt-1 text-foreground">
-                          {formatSessionStamp(session.created_at)}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </SheetContent>
-      </Sheet>
 
       {/* Settings sheet */}
       <Sheet open={settingsSheetOpen} onOpenChange={setSettingsSheetOpen}>

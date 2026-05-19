@@ -37,14 +37,18 @@ const ScreenLoader = () => (
   </div>
 );
 
+const AUTH_CONTEXT_SELECTION_KEY = "sv-mobile:pending-auth-context-selection";
+
 const AuthRoute = () => {
   const { snapshot, isAuthenticated, isHydratingSession } = useSession();
+  const isSelectingContext =
+    window.sessionStorage.getItem(AUTH_CONTEXT_SELECTION_KEY) === "1";
 
   if (isHydratingSession) {
     return <ScreenLoader />;
   }
 
-  if (snapshot.mode === "backend" && isAuthenticated) {
+  if (snapshot.mode === "backend" && isAuthenticated && !isSelectingContext) {
     return <Navigate to="/" replace />;
   }
 

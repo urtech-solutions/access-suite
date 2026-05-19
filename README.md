@@ -26,6 +26,12 @@ App em:
 http://localhost:8080
 ```
 
+O arquivo `.env.development.local` deixa o app em modo `backend` e habilita
+`VITE_DEV_API_MOCK=true`. Nesse modo, o Vite responde as chamadas `/api/*` com
+contratos JSON definidos para desenvolvimento, sem exigir o backend real. Para
+testar contra o backend real em `VITE_DEV_API_PROXY_TARGET`, altere
+`VITE_DEV_API_MOCK=false`.
+
 ### Validacao mobile em Docker
 
 ```bash

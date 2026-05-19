@@ -504,7 +504,7 @@ Garantir que o modulo de convites seja configurado por `site`, apareca apenas em
 
 **Objetivo**
 
-Padronizar o comportamento dos convites criados no app do morador.
+Padronizar o comportamento dos convites criados no app mobile.
 
 **Tarefas**
 
@@ -574,7 +574,7 @@ Fechar o fluxo em que o convidado se cadastra primeiro e o morador aprova depois
 - backend:
   - publicar a URL central para o convidado preencher dados e foto;
   - criar o visitante com perfil default e status de pendencia;
-  - notificar o app do morador para aprovacao;
+  - notificar o app mobile para aprovacao;
   - somente apos aprovacao enviar a liberacao definitiva para controller e leitores;
 - app:
   - mostrar notificacao de aprovacao pendente;

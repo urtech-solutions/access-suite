@@ -105,6 +105,23 @@ export function resolveResidentContextKey(
   return context.person_id ?? 0;
 }
 
+export function resolveResidentLoginContextKey(
+  context: Pick<
+    ResidentAppContext,
+    "context_key" | "profile_type" | "person_id" | "site_id" | "tenant_uuid"
+  >,
+) {
+  if (context.context_key?.trim()) {
+    return context.context_key.trim();
+  }
+
+  if (context.profile_type === "SYNDIC") {
+    return `${context.profile_type}:${context.tenant_uuid}:${context.site_id ?? 0}`;
+  }
+
+  return `${context.profile_type}:${context.tenant_uuid}:${context.person_id ?? 0}`;
+}
+
 export function countUniqueTenantContexts(contexts: ResidentAppContext[]) {
   return new Set(contexts.map((context) => context.tenant_uuid)).size;
 }

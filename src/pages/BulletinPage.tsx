@@ -1,39 +1,29 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   CalendarDays,
-  ImagePlus,
   Megaphone,
   Pin,
   Shield,
   Siren,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/features/shared/PageHeader";
 import { useSession } from "@/features/session/SessionProvider";
-import { createBulletin, listBulletin, normalizeApiBaseUrl } from "@/services/mobile-app.service";
-import type { BulletinPost, BulletinTag } from "@/services/mobile-app.types";
+import {
+  getBulletinImageBlob,
+  getBulletinModuleStatus,
+  isProtectedBulletinImageUrl,
+  listBulletin,
+  normalizeApiBaseUrl,
+} from "@/services/mobile-app.service";
+import type {
+  BulletinPost,
+  BulletinTag,
+  SessionSnapshot,
+} from "@/services/mobile-app.types";
 
 const tagConfig: Record<
   BulletinTag,
@@ -60,83 +50,34 @@ function resolveBulletinImageUrl(imageUrl: string | null | undefined, apiBaseUrl
 }
 
 const BulletinPage = () => {
-  const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    title: "",
-    content: "",
-    tag: "AVISO" as BulletinTag,
-    pinned: false,
-    expires_at_local: "",
+
+  const moduleStatusQuery = useQuery({
+    queryKey: [
+      "bulletin-module-status",
+      resident.tenant_uuid,
+      snapshot.mode,
+      connectionState,
+    ],
+    queryFn: () => getBulletinModuleStatus(snapshot, connectionState, resident),
   });
 
   const bulletinQuery = useQuery({
-    queryKey: ["bulletin", snapshot.mode, connectionState],
-    queryFn: () => listBulletin(snapshot, connectionState),
-  });
-
-  const createBulletinMutation = useMutation({
-    mutationFn: async () =>
-      createBulletin(snapshot, connectionState, {
-        title: form.title,
-        content: form.content,
-        tag: form.tag,
-        pinned: form.pinned,
-        expires_at: form.expires_at_local
-          ? new Date(form.expires_at_local).toISOString()
-          : undefined,
-        image: imageFile,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["bulletin"] });
-      setDialogOpen(false);
-      setForm({
-        title: "",
-        content: "",
-        tag: "AVISO",
-        pinned: false,
-        expires_at_local: "",
-      });
-      if (imagePreviewUrl) {
-        URL.revokeObjectURL(imagePreviewUrl);
-      }
-      setImageFile(null);
-      setImagePreviewUrl(null);
-      toast.success("Comunicado publicado no mural.");
-    },
-    onError: (error) => {
-      toast.error(
-        error instanceof Error ? error.message : "Falha ao publicar comunicado.",
-      );
-    },
+    queryKey: ["bulletin", resident.site_id, snapshot.mode, connectionState],
+    queryFn: () => listBulletin(snapshot, connectionState, resident),
+    enabled: moduleStatusQuery.data?.enabled === true,
   });
 
   const posts = bulletinQuery.data ?? [];
   const pinned = posts.filter((post) => post.pinned);
   const regular = posts.filter((post) => !post.pinned);
   const isSyndic = resident.role === "SINDICO";
-  const canSubmit = form.title.trim().length >= 3 && form.content.trim().length >= 8;
+  const bulletinEnabled = moduleStatusQuery.data?.enabled !== false;
 
   const heroPost = useMemo(
     () => pinned[0] ?? regular[0] ?? null,
     [pinned, regular],
   );
-
-  function handleImageChange(file?: File | null) {
-    if (imagePreviewUrl) {
-      URL.revokeObjectURL(imagePreviewUrl);
-    }
-    if (!file) {
-      setImageFile(null);
-      setImagePreviewUrl(null);
-      return;
-    }
-    setImageFile(file);
-    setImagePreviewUrl(URL.createObjectURL(file));
-  }
 
   return (
     <div className="space-y-6 px-4 pb-6 pt-8">
@@ -144,140 +85,25 @@ const BulletinPage = () => {
         title="Mural de avisos"
         subtitle={
           isSyndic
-            ? "Publique comunicados do condomínio para moradores e operação."
+            ? "Acompanhe os comunicados do condomínio publicados pela operação."
             : "Informativos priorizados por gestão, síndico e operação."
         }
         backTo="/"
       />
 
-      {isSyndic ? (
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="w-full gap-2 rounded-[20px]">
-              <Megaphone className="h-4 w-4" />
-              Novo comunicado
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-md rounded-[28px]">
-            <DialogHeader>
-              <DialogTitle>Publicar no mural</DialogTitle>
-            </DialogHeader>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Título</Label>
-                <Input
-                  value={form.title}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, title: event.target.value }))
-                  }
-                  placeholder="Ex.: Interdição temporária da garagem"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Tag</Label>
-                <Select
-                  value={form.tag}
-                  onValueChange={(value) =>
-                    setForm((current) => ({
-                      ...current,
-                      tag: value as BulletinTag,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="AVISO">Aviso</SelectItem>
-                    <SelectItem value="NOTIFICACAO">Notificação</SelectItem>
-                    <SelectItem value="URGENTE">Urgente</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Mensagem</Label>
-                <Textarea
-                  rows={5}
-                  value={form.content}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, content: event.target.value }))
-                  }
-                  placeholder="Escreva o comunicado que será enviado ao mural."
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Imagem</Label>
-                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-[20px] border border-dashed border-border bg-card px-4 py-5 text-sm text-muted-foreground">
-                  <ImagePlus className="h-4 w-4" />
-                  <span>{imageFile ? "Trocar imagem" : "Selecionar imagem opcional"}</span>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    className="hidden"
-                    onChange={(event) => handleImageChange(event.target.files?.[0] ?? null)}
-                  />
-                </label>
-                {imagePreviewUrl ? (
-                  <img
-                    src={imagePreviewUrl}
-                    alt="Pré-visualização"
-                    className="h-40 w-full rounded-[20px] object-cover"
-                  />
-                ) : null}
-              </div>
-
-              <div className="space-y-2">
-                <Label>Expiração</Label>
-                <Input
-                  type="datetime-local"
-                  value={form.expires_at_local}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      expires_at_local: event.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              <label className="flex items-center gap-3 rounded-[20px] border border-border px-4 py-3 text-sm">
-                <input
-                  type="checkbox"
-                  checked={form.pinned}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, pinned: event.target.checked }))
-                  }
-                />
-                <div>
-                  <p className="font-medium text-foreground">Fixar no topo</p>
-                  <p className="text-xs text-muted-foreground">
-                    Deixa o comunicado destacado para o condomínio ativo.
-                  </p>
-                </div>
-              </label>
-
-              <Button
-                className="w-full"
-                disabled={!canSubmit || createBulletinMutation.isPending}
-                onClick={() => void createBulletinMutation.mutateAsync()}
-              >
-                {createBulletinMutation.isPending ? "Publicando..." : "Publicar"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+      {!bulletinEnabled ? (
+        <div className="rounded-[24px] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
+          O módulo de mural está desabilitado para este tenant.
+        </div>
       ) : null}
 
-      {heroPost ? (
+      {bulletinEnabled && heroPost ? (
         <section className="overflow-hidden rounded-[30px] border border-accent/30 bg-card shadow-sm">
           {heroPost.image_url ? (
-            <img
-              src={resolveBulletinImageUrl(heroPost.image_url, snapshot.apiBaseUrl)}
-              alt={heroPost.title}
+            <BulletinImage
+              imageUrl={heroPost.image_url}
+              title={heroPost.title}
+              snapshot={snapshot}
               className="h-56 w-full object-cover"
             />
           ) : null}
@@ -309,7 +135,7 @@ const BulletinPage = () => {
         </section>
       ) : null}
 
-      {pinned.length > 0 ? (
+      {bulletinEnabled && pinned.length > 0 ? (
         <section className="space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">
             <Pin className="h-3.5 w-3.5" />
@@ -320,12 +146,13 @@ const BulletinPage = () => {
               key={post.id}
               post={post}
               index={index}
-              apiBaseUrl={snapshot.apiBaseUrl}
+              snapshot={snapshot}
             />
           ))}
         </section>
       ) : null}
 
+      {bulletinEnabled ? (
       <section className="space-y-3">
         <div className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">
           Recentes
@@ -335,7 +162,7 @@ const BulletinPage = () => {
             key={post.id}
             post={post}
             index={index}
-            apiBaseUrl={snapshot.apiBaseUrl}
+            snapshot={snapshot}
           />
         ))}
 
@@ -345,6 +172,7 @@ const BulletinPage = () => {
           </div>
         ) : null}
       </section>
+      ) : null}
     </div>
   );
 };
@@ -352,11 +180,11 @@ const BulletinPage = () => {
 function BulletinCard({
   post,
   index,
-  apiBaseUrl,
+  snapshot,
 }: {
   post: BulletinPost;
   index: number;
-  apiBaseUrl: string;
+  snapshot: SessionSnapshot;
 }) {
   const config = tagConfig[post.tag];
   const Icon = config.icon;
@@ -369,9 +197,10 @@ function BulletinCard({
       className="overflow-hidden rounded-[24px] border border-border bg-card shadow-sm"
     >
       {post.image_url ? (
-        <img
-          src={resolveBulletinImageUrl(post.image_url, apiBaseUrl)}
-          alt={post.title}
+        <BulletinImage
+          imageUrl={post.image_url}
+          title={post.title}
+          snapshot={snapshot}
           className="h-48 w-full object-cover"
         />
       ) : null}
@@ -405,6 +234,58 @@ function BulletinCard({
       </div>
     </motion.article>
   );
+}
+
+function BulletinImage({
+  imageUrl,
+  title,
+  snapshot,
+  className,
+}: {
+  imageUrl: string;
+  title: string;
+  snapshot: SessionSnapshot;
+  className: string;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const { apiBaseUrl, token } = snapshot;
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    setSrc(null);
+
+    if (!isProtectedBulletinImageUrl(imageUrl)) {
+      setSrc(resolveBulletinImageUrl(imageUrl, apiBaseUrl));
+      return undefined;
+    }
+
+    void getBulletinImageBlob({ apiBaseUrl, token }, imageUrl)
+      .then((blob) => {
+        const nextUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(nextUrl);
+          return;
+        }
+        objectUrl = nextUrl;
+        setSrc(nextUrl);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSrc(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [apiBaseUrl, imageUrl, token]);
+
+  return src ? <img src={src} alt={title} className={className} /> : null;
 }
 
 export default BulletinPage;

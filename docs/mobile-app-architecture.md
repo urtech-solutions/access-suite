@@ -44,10 +44,10 @@ O app opera em dois modos:
 - persistencia local e fila pendente no proprio navegador.
 
 2. `backend`
-- usa autenticacao propria de morador por `CPF + senha` via `resident-app-auth`;
-- o token pertence a identidade do CPF e o contexto ativo (`site/apartamento/tenant`) e separado;
+- usa autenticacao propria de pessoa cadastrada por `CPF + senha` via `auth/person-app`;
+- o token pertence a identidade do CPF e o contexto ativo (`tenant/site/unidade/papel`) e separado;
 - quando o mesmo CPF for liberado em novos sites ou tenants, os novos contextos aparecem na sessao do app sem recriar conta;
-- integra, neste corte, com endpoints proprios do app do morador:
+- integra, neste corte, com endpoints proprios do app mobile:
   - `resident-app/visitors`
   - `resident-app/incidents`
   - `resident-app/bulletin`

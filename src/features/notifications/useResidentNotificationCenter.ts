@@ -10,6 +10,7 @@ import {
   type ResidentNotificationScope,
 } from "@/features/notifications/resident-notifications";
 import {
+  BULLETIN_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
   getChatSettings,
   getDeliverySettings,
@@ -44,6 +45,7 @@ export function useResidentNotificationCenter() {
     readNotificationReadMap(notificationScope),
   );
   const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
 
   useEffect(() => {
     setReadMap(readNotificationReadMap(notificationScope));
@@ -98,8 +100,9 @@ export function useResidentNotificationCenter() {
   });
 
   const bulletinQuery = useQuery({
-    queryKey: ["bulletin", snapshot.mode, connectionState],
-    queryFn: () => listBulletin(snapshot, connectionState),
+    queryKey: ["bulletin", resident.site_id, snapshot.mode, connectionState],
+    queryFn: () => listBulletin(snapshot, connectionState, resident),
+    enabled: hasBulletinModule,
   });
 
   const chatSettingsQuery = useQuery({

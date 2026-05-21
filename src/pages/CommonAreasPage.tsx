@@ -110,6 +110,12 @@ function toTimeInputValue(value: Date) {
   return `${padNumber(value.getHours())}:${padNumber(value.getMinutes())}`;
 }
 
+function toLocalDateTimeValue(value: Date) {
+  return `${value.getFullYear()}-${padNumber(value.getMonth() + 1)}-${padNumber(
+    value.getDate(),
+  )}T${padNumber(value.getHours())}:${padNumber(value.getMinutes())}:00`;
+}
+
 function formatDurationLabel(minutes: number) {
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
@@ -315,8 +321,8 @@ function buildReservationWindow(
     localStart.getTime() + durationHours * 60 * 60 * 1000,
   );
   return {
-    reserved_from: localStart.toISOString(),
-    reserved_until: localEnd.toISOString(),
+    reserved_from: toLocalDateTimeValue(localStart),
+    reserved_until: toLocalDateTimeValue(localEnd),
   };
 }
 

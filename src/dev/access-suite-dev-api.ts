@@ -262,6 +262,131 @@ function findResidentBySite(siteId: number) {
   );
 }
 
+function createIncidentFromAccessOsPayload(
+  request: DevApiRequest,
+  state: DevApiState,
+) {
+  const payload = getPayload(request);
+  const externalId = readString(payload.external_id);
+  const siteId = readNumber(payload.site_id, 11);
+  const title = readString(payload.title);
+  const description = readString(payload.description);
+
+  if (!externalId || !siteId || !title || !description) {
+    return makeJson(
+      { message: "external_id, site_id, title e description são obrigatórios." },
+      400,
+    );
+  }
+
+  const existing = state.incidents.find(
+    (incident) =>
+      incident.external?.source === "ACCESS_OS" &&
+      incident.external.id === externalId,
+  );
+  if (existing) {
+    return makeJson(existing);
+  }
+
+  const resident = findResidentBySite(siteId);
+  const topicId = readNumber(payload.topic_id);
+  const topicLabel = readString(payload.topic_label);
+  let topic =
+    getIncidentTopics(siteId).find((item) => item.id === topicId) ??
+    getIncidentTopics(siteId).find(
+      (item) => topicLabel && item.label.toLowerCase() === topicLabel.toLowerCase(),
+    ) ??
+    getIncidentTopics(siteId)[0] ??
+    null;
+
+  if (!topic && topicLabel) {
+    topic = {
+      id: nextId(state.incidents.map((incident) => ({ id: incident.topic?.id ?? 0 })), 9100),
+      site_id: siteId,
+      label: topicLabel,
+      description: null,
+      active: true,
+      sort_order: 0,
+    };
+  }
+
+  const personId = readNumber(payload.person_id);
+  const requester = state.residents.find((item) => item.id === personId);
+  const requesterName =
+    requester?.name || readString(payload.requester_name) || "Access OS";
+  const requesterUnitLabel =
+    requester?.unit_label || readString(payload.requester_unit_label) || null;
+  const createdAt = readString(payload.occurred_at, now());
+  const created: IncidentEntry = {
+    id: nextId(state.incidents, 5100),
+    title,
+    description,
+    category: topic?.label ?? "Incidente",
+    status: "OPEN",
+    created_at: createdAt,
+    updated_at: now(),
+    last_message_at: createdAt,
+    topic,
+    person: requester
+      ? {
+          id: requester.id,
+          name: requester.name,
+          unit_label: requester.unit_label ?? null,
+        }
+      : null,
+    site: {
+      id: siteId,
+      name: resident.site_name,
+    },
+    participant_count: requester ? 1 : 0,
+    message_count: 1,
+    last_message_preview: description,
+    external: {
+      source: "ACCESS_OS",
+      id: externalId,
+      payload: asObject(payload.payload),
+    },
+    participants: requester
+      ? [
+          {
+            id: Date.now(),
+            kind: "PERSON",
+            role: "REQUESTER",
+            label: requesterName,
+            unit_label: requesterUnitLabel,
+            is_me: false,
+            created_at: createdAt,
+          },
+        ]
+      : [],
+    messages: [
+      {
+        id: `dev-message-${Date.now()}`,
+        message_text: description,
+        created_at: createdAt,
+        sender_kind: requester ? "PERSON" : "SYSTEM",
+        sender_label: requesterName,
+        sender_role: requester ? requester.role : "ACCESS_OS",
+        is_me: false,
+      },
+    ],
+    events: [
+      {
+        id: Date.now(),
+        event_type: "INCIDENT_CREATED",
+        description: "Incidente recebido da integração Access OS.",
+        actor_kind: "SYSTEM",
+        actor_label: "Access OS",
+        metadata: { external_id: externalId, dev_api: true },
+        created_at: now(),
+      },
+    ],
+  };
+
+  state.incidents = [created, ...state.incidents];
+  return makeJson(created, 201);
+}
+
 function getRequestIdentity(state: DevApiState) {
   const resident = state.residents[0] ?? demoResidents[0];
   return {
@@ -549,7 +674,7 @@ const routes: RouteDefinition[] = [
   {
     label: "incident settings",
     method: "GET",
-    pattern: /^\/incidents\/settings$/,
+    pattern: /^\/(?:resident-app\/)?incidents\/settings$/,
     handler: (request) =>
       makeJson(
         createIncidentSettings(
@@ -558,9 +683,26 @@ const routes: RouteDefinition[] = [
       ),
   },
   {
+    label: "incident topics",
+    method: "GET",
+    pattern: /^\/incidents\/topics$/,
+    handler: (request) =>
+      makeJson(
+        getIncidentTopics(
+          readNumber(request.searchParams.get("site_id"), 11),
+        ),
+      ),
+  },
+  {
+    label: "create access os incident",
+    method: "POST",
+    pattern: /^\/integrations\/access-os\/incidents$/,
+    handler: createIncidentFromAccessOsPayload,
+  },
+  {
     label: "incident participant options",
     method: "GET",
-    pattern: /^\/incidents\/participant-options$/,
+    pattern: /^\/(?:resident-app\/)?incidents\/participant-options$/,
     handler: (request, state) => {
       const siteId = readNumber(request.searchParams.get("site_id"), 11);
       const options: IncidentParticipantOption[] = state.residents
@@ -577,7 +719,7 @@ const routes: RouteDefinition[] = [
   {
     label: "list incidents",
     method: "GET",
-    pattern: /^\/incidents$/,
+    pattern: /^\/(?:resident-app\/)?incidents$/,
     handler: (request, state) => {
       const siteId = readNumber(request.searchParams.get("site_id"), 11);
       const status = request.searchParams.get("status");
@@ -593,7 +735,7 @@ const routes: RouteDefinition[] = [
   {
     label: "get incident",
     method: "GET",
-    pattern: /^\/incidents\/(\d+)$/,
+    pattern: /^\/(?:resident-app\/)?incidents\/(\d+)$/,
     handler: (request, state) => {
       const incidentId = readNumber(request.path.match(/\d+/)?.[0]);
       const incident = state.incidents.find((item) => item.id === incidentId);
@@ -678,7 +820,7 @@ const routes: RouteDefinition[] = [
   {
     label: "send incident message",
     method: "POST",
-    pattern: /^\/incidents\/(\d+)\/messages$/,
+    pattern: /^\/(?:resident-app\/)?incidents\/(\d+)\/messages$/,
     handler: (request, state) => {
       const incidentId = readNumber(request.path.match(/\d+/)?.[0]);
       const payload = getPayload(request);

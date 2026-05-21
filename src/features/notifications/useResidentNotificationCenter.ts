@@ -11,10 +11,8 @@ import {
 } from "@/features/notifications/resident-notifications";
 import {
   BULLETIN_MODULE_KEY,
-  INCIDENTS_MODULE_KEY,
   getChatSettings,
   getDeliverySettings,
-  getIncidentSettings,
   listBulletin,
   listChatThreads,
   listDeliveries,
@@ -44,7 +42,6 @@ export function useResidentNotificationCenter() {
   const [readMap, setReadMap] = useState(() =>
     readNotificationReadMap(notificationScope),
   );
-  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
   const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
 
   useEffect(() => {
@@ -82,21 +79,9 @@ export function useResidentNotificationCenter() {
       deliverySettingsQuery.data?.enabled !== false,
   });
 
-  const incidentSettingsQuery = useQuery({
-    queryKey: [
-      "incident-settings",
-      resident.site_id,
-      snapshot.mode,
-      connectionState,
-    ],
-    queryFn: () => getIncidentSettings(snapshot, connectionState, resident),
-    enabled: hasIncidentsModule,
-  });
-
   const incidentsQuery = useQuery({
     queryKey: ["incidents", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listIncidents(snapshot, connectionState, resident),
-    enabled: hasIncidentsModule && incidentSettingsQuery.data?.enabled === true,
   });
 
   const bulletinQuery = useQuery({
@@ -216,7 +201,6 @@ export function useResidentNotificationCenter() {
     deliveriesQuery,
     deliverySettingsQuery,
     incidentsQuery,
-    incidentSettingsQuery,
     bulletinQuery,
     chatThreadsQuery,
     chatSettingsQuery,

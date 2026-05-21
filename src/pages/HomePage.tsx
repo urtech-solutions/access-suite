@@ -42,9 +42,7 @@ import {
 } from "@/lib/browser-notifications";
 import {
   BULLETIN_MODULE_KEY,
-  INCIDENTS_MODULE_KEY,
   getDeliverySettings,
-  getIncidentSettings,
   listBulletin,
   listCommonAreas,
   listDeliveries,
@@ -84,7 +82,6 @@ const HomePage = () => {
   const [switchingId, setSwitchingId] = useState<number | null>(null);
 
   const canSwitchContext = residents.length > 1;
-  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
   const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
 
   async function handleSwitchContext(nextId: number) {
@@ -149,21 +146,9 @@ const HomePage = () => {
     resident.role === "MORADOR" &&
     deliverySettingsQuery.data?.enabled !== false;
 
-  const incidentSettingsQuery = useQuery({
-    queryKey: [
-      "incident-settings",
-      resident.site_id,
-      snapshot.mode,
-      connectionState,
-    ],
-    queryFn: () => getIncidentSettings(snapshot, connectionState, resident),
-    enabled: hasIncidentsModule,
-  });
-
   const incidentsQuery = useQuery({
     queryKey: ["incidents", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listIncidents(snapshot, connectionState, resident),
-    enabled: hasIncidentsModule && incidentSettingsQuery.data?.enabled === true,
   });
 
   // ─── Derived data ───
@@ -196,18 +181,14 @@ const HomePage = () => {
           },
         ]
       : []),
-    ...(hasIncidentsModule
-      ? [
-          {
-            icon: AlertTriangle,
-            label: "Incidentes",
-            path: "/porteiro/incidentes",
-            tone: "bg-red-500/10 text-red-600",
-            description: "Fila operacional",
-            badgeCount: attentionCounts.incidents,
-          },
-        ]
-      : []),
+    {
+      icon: AlertTriangle,
+      label: "Incidentes",
+      path: "/porteiro/incidentes",
+      tone: "bg-red-500/10 text-red-600",
+      description: "Fila operacional",
+      badgeCount: attentionCounts.incidents,
+    },
     ...(hasBulletinModule
       ? [
           {

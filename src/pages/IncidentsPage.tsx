@@ -13,7 +13,6 @@ import {
   Plus,
   Send,
   ShieldPlus,
-  Sparkles,
   UserPlus,
   Video,
 } from "lucide-react";
@@ -40,7 +39,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/features/shared/PageHeader";
 import { useSession } from "@/features/session/SessionProvider";
 import {
-  INCIDENTS_MODULE_KEY,
   addIncidentParticipant,
   createIncident,
   getIncident,
@@ -49,8 +47,6 @@ import {
   listIncidents,
   normalizeApiBaseUrl,
   sendIncidentMessage,
-  sessionHasModule,
-  updateIncidentStatus,
 } from "@/services/mobile-app.service";
 import type {
   IncidentAttachment,
@@ -184,7 +180,6 @@ function AttachmentChip({
 export default function IncidentsPage() {
   const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
-  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
   const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null);
   const [topicFilter, setTopicFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | IncidentStatus>("all");
@@ -200,7 +195,6 @@ export default function IncidentsPage() {
   const settingsQuery = useQuery({
     queryKey: ["incident-settings", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => getIncidentSettings(snapshot, connectionState, resident),
-    enabled: hasIncidentsModule,
   });
 
   const incidentsQuery = useQuery({
@@ -217,7 +211,6 @@ export default function IncidentsPage() {
         status: statusFilter,
         topicId: topicFilter,
       }),
-    enabled: hasIncidentsModule && settingsQuery.data?.enabled === true,
   });
 
   const filteredIncidents = useMemo(() => {
@@ -244,19 +237,13 @@ export default function IncidentsPage() {
       selectedIncidentId
         ? getIncident(snapshot, connectionState, resident, selectedIncidentId)
         : null,
-    enabled:
-      Boolean(selectedIncidentId) &&
-      hasIncidentsModule &&
-      settingsQuery.data?.enabled === true,
+    enabled: Boolean(selectedIncidentId),
   });
 
   const participantOptionsQuery = useQuery({
     queryKey: ["incident-participant-options", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listIncidentParticipantOptions(snapshot, connectionState, resident),
-    enabled:
-      Boolean(selectedIncidentId) &&
-      hasIncidentsModule &&
-      settingsQuery.data?.enabled === true,
+    enabled: Boolean(selectedIncidentId),
   });
 
   const createRequesterOptionsQuery = useQuery({
@@ -267,10 +254,7 @@ export default function IncidentsPage() {
       connectionState,
     ],
     queryFn: () => listIncidentParticipantOptions(snapshot, connectionState, resident),
-    enabled:
-      createDialogOpen &&
-      hasIncidentsModule &&
-      settingsQuery.data?.enabled === true,
+    enabled: createDialogOpen,
   });
 
   const selectedIncident =
@@ -418,33 +402,6 @@ export default function IncidentsPage() {
     },
   });
 
-  const updateStatusMutation = useMutation({
-    mutationFn: (status: IncidentStatus) =>
-      selectedIncidentId
-        ? updateIncidentStatus(
-            snapshot,
-            connectionState,
-            resident,
-            selectedIncidentId,
-            status,
-          )
-        : Promise.resolve(null),
-    onSuccess: async (incident) => {
-      if (!incident) return;
-      await queryClient.invalidateQueries({ queryKey: ["incidents"] });
-      queryClient.setQueryData(
-        ["incident-detail", incident.id, resident.site_id, snapshot.mode, connectionState],
-        incident,
-      );
-      toast.success("Status do incidente atualizado.");
-    },
-    onError: (error) => {
-      toast.error(
-        error instanceof Error ? error.message : "Falha ao atualizar status.",
-      );
-    },
-  });
-
   const stats = [
     {
       label: "Abertos",
@@ -544,25 +501,9 @@ export default function IncidentsPage() {
             <div>
               <p className="text-sm font-semibold text-foreground">Condução do incidente</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Atualize o status, distribua participantes e mantenha a trilha do tratamento.
+                Distribua participantes e mantenha a trilha do tratamento.
               </p>
             </div>
-            <Sparkles className="h-5 w-5 text-primary" />
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            {(["OPEN", "IN_PROGRESS", "CLOSED"] as IncidentStatus[]).map((status) => (
-              <Button
-                key={status}
-                variant={selectedIncident.status === status ? "accent" : "outline"}
-                size="sm"
-                className="rounded-full"
-                disabled={updateStatusMutation.isPending}
-                onClick={() => updateStatusMutation.mutate(status)}
-              >
-                {statusMeta[status].label}
-              </Button>
-            ))}
           </div>
 
           <div className="mt-4 rounded-[22px] border border-border bg-muted/40 p-3">
@@ -757,7 +698,6 @@ export default function IncidentsPage() {
           <Button
             size="sm"
             className="shrink-0 rounded-xl"
-            disabled={!hasIncidentsModule || settingsQuery.data?.enabled !== true}
             onClick={openCreateDialog}
           >
             <Plus className="h-4 w-4" />
@@ -772,27 +712,7 @@ export default function IncidentsPage() {
         </div>
       ) : null}
 
-      {settingsQuery.data && !settingsQuery.data.enabled ? (
-        <div className="rounded-[28px] border border-border bg-card p-5 shadow-sm">
-          <div className="flex items-start gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-secondary text-secondary-foreground">
-              <AlertTriangle className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-foreground">
-                O módulo de incidentes está desabilitado neste site.
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Quando a gestão habilitar o módulo no Management, o mural operacional
-                volta a aparecer automaticamente.
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {settingsQuery.data?.enabled === true ? (
-        <>
+      <>
           <div className="relative overflow-hidden rounded-[30px] border border-primary/10 bg-[linear-gradient(145deg,rgba(6,14,24,0.98),rgba(29,78,216,0.92))] px-5 pb-5 pt-5 text-white shadow-xl shadow-slate-900/20">
             <div className="absolute inset-x-0 top-0 h-24 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.35),transparent_45%)]" />
 
@@ -951,8 +871,7 @@ export default function IncidentsPage() {
               </div>
             ) : null}
           </section>
-        </>
-      ) : null}
+      </>
 
       <Dialog
         open={createDialogOpen}

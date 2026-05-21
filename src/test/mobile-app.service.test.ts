@@ -12,6 +12,7 @@ import {
   getDeliverySettings,
   getBulletinImageBlob,
   getBulletinModuleStatus,
+  getIncidentSettings,
   isProtectedBulletinImageUrl,
   getVisitorSettings,
   hydrateBackendSession,
@@ -28,9 +29,12 @@ import {
   readPendingActions,
   readPreviewState,
   saveSessionSnapshot,
-  sessionHasModule,
 } from "@/services/mobile-app.service";
-import type { CommonArea, SessionSnapshot } from "@/services/mobile-app.types";
+import type {
+  CommonArea,
+  ReservationEntry,
+  SessionSnapshot,
+} from "@/services/mobile-app.types";
 
 describe("mobile-app service", () => {
   const resident = demoResidents[0];
@@ -438,8 +442,6 @@ describe("mobile-app service", () => {
       enabled: true,
     });
     await expect(listVisitors(snapshot, "online", resident)).resolves.not.toHaveLength(0);
-    await expect(listCommonAreas(snapshot, "online")).resolves.not.toHaveLength(0);
-    await expect(listReservations(snapshot, "online", resident)).resolves.not.toHaveLength(0);
     await expect(getDeliverySettings(snapshot, "online")).resolves.toMatchObject({
       enabled: true,
     });
@@ -447,7 +449,7 @@ describe("mobile-app service", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("keeps disabled backend reservation creation local without calling the API", async () => {
+  it("creates reservations through the resident-app API with local datetimes", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
@@ -473,15 +475,32 @@ describe("mobile-app service", () => {
       status: "ACTIVE",
     };
 
-    const reservationsBefore = readPreviewState().reservations.length;
+    const createdReservation: ReservationEntry = {
+      id: 8801,
+      event_name: "Reserva",
+      guest_count: 20,
+      reserved_from: "2026-03-20T18:00:00",
+      reserved_until: "2026-03-20T21:00:00",
+      notes: null,
+      status: "PENDING_APPROVAL",
+      area: {
+        id: area.id,
+        name: area.name,
+        capacity: area.capacity,
+        opening_time: area.opening_time,
+        closing_time: area.closing_time,
+        requires_approval: area.requires_approval,
+      },
+      person: { id: resident.id, name: resident.name },
+      public_link: null,
+    };
     const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 409,
+      ok: true,
       headers: {
         get: (name: string) =>
           name.toLowerCase() === "content-type" ? "application/json" : null,
       },
-      json: async () => ({ message: "Horário já reservado." }),
+      json: async () => createdReservation,
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -490,19 +509,30 @@ describe("mobile-app service", () => {
       area_id: area.id,
       event_name: "Aniversário",
       guest_count: 20,
-      reserved_from: "2026-03-20T18:00:00.000Z",
-      reserved_until: "2026-03-20T21:00:00.000Z",
+      reserved_from: "2026-03-20T18:00:00",
+      reserved_until: "2026-03-20T21:00:00",
     });
 
-    expect(created.event_name).toBe("Aniversário");
-    expect(created.local_only).toBe(true);
-    expect(created.pending_sync).toBe(false);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(readPreviewState().reservations).toHaveLength(reservationsBefore + 1);
-    expect(readPendingActions()).toHaveLength(0);
+    expect(created).toEqual(createdReservation);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/resident-app/reservations",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-online",
+        }),
+        body: JSON.stringify({
+          area_id: area.id,
+          title: "Aniversário",
+          reserved_from: "2026-03-20T18:00:00",
+          reserved_until: "2026-03-20T21:00:00",
+          guest_count: 20,
+        }),
+      }),
+    );
   });
 
-  it("keeps disabled backend reservations local when offline", async () => {
+  it("keeps backend reservations pending when offline", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
@@ -524,13 +554,13 @@ describe("mobile-app service", () => {
       area_id: 101,
       event_name: "Churrasco",
       guest_count: 12,
-      reserved_from: "2026-03-22T16:00:00.000Z",
-      reserved_until: "2026-03-22T20:00:00.000Z",
+      reserved_from: "2026-03-22T16:00:00",
+      reserved_until: "2026-03-22T20:00:00",
     });
 
-    expect(created.local_only).toBe(true);
-    expect(created.pending_sync).toBe(false);
-    expect(readPendingActions()).toHaveLength(0);
+    expect(created.local_only).toBe(false);
+    expect(created.pending_sync).toBe(true);
+    expect(readPendingActions()).toHaveLength(1);
   });
 
   it("disconnects locally without calling removed resident app endpoints", () => {
@@ -558,7 +588,7 @@ describe("mobile-app service", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("gates incident requests by the INCIDENTS tenant module", async () => {
+  it("does not gate incident requests by the INCIDENTS tenant module", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
@@ -575,12 +605,76 @@ describe("mobile-app service", () => {
       user: { uuid: "user-1", modules: [] },
     };
 
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
+      json: async () => [],
+    });
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(sessionHasModule(snapshot, "INCIDENTS")).toBe(false);
     await expect(listIncidents(snapshot, "online", resident)).resolves.toEqual([]);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/resident-app/incidents?site_id=11",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Bearer access-token",
+        }),
+      }),
+    );
+  });
+
+  it("loads incident topics from the documented topics API", async () => {
+    const snapshot: SessionSnapshot = {
+      mode: "backend",
+      apiBaseUrl: "http://localhost:3000",
+      resident,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: null,
+        contexts: [],
+      },
+      token: "access-token",
+      refreshToken: null,
+      user: { uuid: "user-1", modules: [] },
+    };
+    const topics = [
+      {
+        id: 9101,
+        site_id: resident.site_id,
+        label: "Segurança",
+        description: null,
+        active: true,
+        sort_order: 1,
+      },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
+      json: async () => topics,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      getIncidentSettings(snapshot, "online", resident),
+    ).resolves.toMatchObject({ topics });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/incidents/topics?site_id=11",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Bearer access-token",
+        }),
+      }),
+    );
   });
 
   it("lists incidents with active site, status and topic filters", async () => {
@@ -616,7 +710,7 @@ describe("mobile-app service", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3000/incidents?site_id=11&status=OPEN&topic_id=9101",
+      "http://localhost:3000/resident-app/incidents?site_id=11&status=OPEN&topic_id=9101",
       expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({
@@ -626,7 +720,7 @@ describe("mobile-app service", () => {
     );
   });
 
-  it("creates incidents through the documented operational API", async () => {
+  it("creates incidents through the Access OS integration API", async () => {
     const syndicResident = {
       ...resident,
       id: 11,
@@ -681,6 +775,7 @@ describe("mobile-app service", () => {
 
     await expect(
       createIncident(snapshot, "online", syndicResident, {
+        external_id: "access-os-incident-test-1",
         site_id: 11,
         person_id: 101,
         title: " Portão social lento ",
@@ -695,15 +790,22 @@ describe("mobile-app service", () => {
     ).resolves.toEqual(created);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3000/incidents",
+      "http://localhost:3000/integrations/access-os/incidents",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
+          external_id: "access-os-incident-test-1",
           site_id: 11,
-          person_id: 101,
           topic_id: 9101,
           title: "Portão social lento",
           description: "O portão está demorando para fechar.",
+          requester_name: "Maria Contexto",
+          requester_unit_label: "Apto 101",
+          payload: {
+            access_suite_resident_id: 11,
+            access_suite_context_id: 11,
+            requester_person_id: 101,
+          },
         }),
       }),
     );

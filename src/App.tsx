@@ -13,10 +13,6 @@ import { ResidentWebPushBridge } from "@/features/notifications/ResidentWebPushB
 import { ResidentRealtimeBridge } from "@/features/realtime/ResidentRealtimeBridge";
 import { useSession } from "@/features/session/SessionProvider";
 import { AppProviders } from "@/providers/AppProviders";
-import {
-  INCIDENTS_MODULE_KEY,
-  sessionHasModule,
-} from "@/services/mobile-app.service";
 
 const AuthPage = lazy(() => import("@/pages/AuthPage"));
 const BulletinPage = lazy(() => import("@/pages/BulletinPage"));
@@ -77,22 +73,6 @@ const ProtectedShell = () => {
   );
 };
 
-const TenantModuleRoute = ({
-  moduleKey,
-  children,
-}: {
-  moduleKey: string;
-  children: JSX.Element;
-}) => {
-  const { snapshot } = useSession();
-
-  if (!sessionHasModule(snapshot, moduleKey)) {
-    return <Navigate to="/" replace />;
-  }
-
-  return children;
-};
-
 const App = () => (
   <AppProviders>
     <BrowserRouter
@@ -110,11 +90,7 @@ const App = () => (
             <Route path="/financeiro" element={<FinanceiroPage />} />
             <Route
               path="/porteiro/incidentes"
-              element={
-                <TenantModuleRoute moduleKey={INCIDENTS_MODULE_KEY}>
-                  <IncidentsPage />
-                </TenantModuleRoute>
-              }
+              element={<IncidentsPage />}
             />
             <Route
               path="/incidents"

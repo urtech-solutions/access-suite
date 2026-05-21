@@ -314,6 +314,11 @@ export interface IncidentEntry {
   participants?: IncidentParticipant[];
   messages?: IncidentMessage[];
   events?: IncidentEvent[];
+  external?: {
+    source?: string | null;
+    id?: string | null;
+    payload?: Record<string, unknown> | null;
+  } | null;
   local_only?: boolean;
   pending_sync?: boolean;
 }
@@ -549,11 +554,17 @@ export interface CreateVisitorInput {
 }
 
 export interface CreateIncidentInput {
+  external_id?: string;
   title: string;
   description: string;
   site_id?: number | null;
   person_id?: number | null;
   topic_id: number;
+  topic_label?: string | null;
+  occurred_at?: string | null;
+  requester_name?: string | null;
+  requester_unit_label?: string | null;
+  payload?: Record<string, unknown> | null;
   attachment?: File | null;
   requester?: {
     id: number;

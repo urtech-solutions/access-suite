@@ -9,12 +9,7 @@ import {
 } from "lucide-react";
 
 import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
-import { useSession } from "@/features/session/SessionProvider";
 import { cn } from "@/lib/utils";
-import {
-  INCIDENTS_MODULE_KEY,
-  sessionHasModule,
-} from "@/services/mobile-app.service";
 
 const tabs = [
   { path: "/", icon: Home, label: "Início", exact: true },
@@ -38,14 +33,7 @@ const tabs = [
 const AppLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { snapshot } = useSession();
   const { attentionCounts } = useResidentNotificationCenter();
-  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
-  const visibleTabs = tabs.filter(
-    (tab) =>
-      tab.path !== "/porteiro/incidentes" ||
-      hasIncidentsModule,
-  );
 
   function isTabActive(tab: (typeof tabs)[number]) {
     if (tab.exact) return location.pathname === tab.path;
@@ -78,10 +66,10 @@ const AppLayout = () => {
           <div
             className={cn(
               "grid rounded-[26px] border border-border/60 bg-card/95 px-1.5 py-1.5 shadow-2xl shadow-black/12 backdrop-blur-xl",
-              visibleTabs.length > 5 ? "grid-cols-6" : "grid-cols-5",
+              tabs.length > 5 ? "grid-cols-6" : "grid-cols-5",
             )}
           >
-            {visibleTabs.map((tab) => {
+            {tabs.map((tab) => {
               const active = isTabActive(tab);
               const badge = resolveTabBadge(tab.path);
               return (

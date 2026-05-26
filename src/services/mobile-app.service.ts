@@ -18,6 +18,7 @@ import type {
   CreateVisitorInput,
   DeliveryEntry,
   DeliveryModuleSettings,
+  DeliveryStatus,
   IncidentEntry,
   IncidentModuleSettings,
   IncidentParticipantOption,
@@ -55,7 +56,6 @@ const PRIVATE_HTTP_HOST_PATTERN =
   /^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})$/;
 const DISABLED_RESIDENT_APP_REQUEST_MODULES = new Set([
   VISITORS_MODULE_KEY,
-  DELIVERIES_MODULE_KEY,
   FINANCEIRO_MODULE_KEY,
 ]);
 const BULLETIN_TAGS = new Set<BulletinTag>([
@@ -368,7 +368,7 @@ async function requestBlob(
     });
   } catch {
     throw new Error(
-      "Não foi possível conectar à API para carregar a imagem do mural.",
+      "Não foi possível conectar à API para carregar o arquivo.",
     );
   }
 
@@ -2692,6 +2692,148 @@ export async function updateReservationHeadcount(
   return updated ?? undefined;
 }
 
+function deliveryCacheKey(
+  residentId: number,
+  filters: { status?: DeliveryStatus | "all" | null } = {},
+) {
+  const status = filters.status && filters.status !== "all" ? filters.status : "all";
+  return `deliveries:${residentId}:status:${status}`;
+}
+
+function normalizeDeliveryPhotoUrl(value?: string | null) {
+  const photoUrl = String(value ?? "").trim();
+  return photoUrl.length > 0 ? photoUrl : null;
+}
+
+function canContestDelivery(delivery: DeliveryEntry) {
+  if (delivery.can_contest !== undefined) {
+    return Boolean(delivery.can_contest);
+  }
+
+  if (delivery.status !== "OPERATOR_DELIVERED" || !delivery.contest_deadline_at) {
+    return false;
+  }
+
+  const deadline = new Date(delivery.contest_deadline_at).getTime();
+  return Number.isFinite(deadline) && deadline > Date.now();
+}
+
+function normalizeDelivery(delivery: DeliveryEntry): DeliveryEntry {
+  return {
+    ...delivery,
+    arrival_photo_url: normalizeDeliveryPhotoUrl(delivery.arrival_photo_url),
+    pickup_photo_url: normalizeDeliveryPhotoUrl(delivery.pickup_photo_url),
+    can_contest: canContestDelivery(delivery),
+  };
+}
+
+function normalizeDeliveries(deliveries: DeliveryEntry[]) {
+  return deliveries.map(normalizeDelivery);
+}
+
+function filterDeliveries(
+  deliveries: DeliveryEntry[],
+  filters: { status?: DeliveryStatus | "all" | null } = {},
+) {
+  const status = filters.status && filters.status !== "all" ? filters.status : null;
+  return status
+    ? deliveries.filter((delivery) => delivery.status === status)
+    : deliveries;
+}
+
+function readResidentDeliveries(
+  resident: ResidentProfile,
+  filters: { status?: DeliveryStatus | "all" | null } = {},
+) {
+  const cached = readCache<DeliveryEntry[] | null>(
+    deliveryCacheKey(resident.id, filters),
+    null,
+  );
+  if (cached) {
+    return normalizeDeliveries(cached);
+  }
+
+  return filterDeliveries(readResidentDeliveriesFallback(resident), filters);
+}
+
+function upsertDeliveryInCache(
+  resident: ResidentProfile,
+  incoming: DeliveryEntry,
+) {
+  const updated = normalizeDelivery(incoming);
+  const allCacheKey = deliveryCacheKey(resident.id);
+  const current = readCache<DeliveryEntry[]>(allCacheKey, []);
+  const next = current.some((delivery) => delivery.id === updated.id)
+    ? current.map((delivery) =>
+        delivery.id === updated.id ? { ...delivery, ...updated } : delivery,
+      )
+    : [updated, ...current];
+  writeCache(allCacheKey, next);
+  writeCache(`deliveries:${resident.id}`, next);
+  return updated;
+}
+
+export function isProtectedDeliveryPhotoUrl(photoUrl?: string | null) {
+  const value = String(photoUrl ?? "").trim();
+  if (!value || /^(blob|data):/i.test(value)) {
+    return false;
+  }
+
+  if (/^deliver(?:y|ies)\//i.test(value)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(value, "http://access-suite.local");
+    return /\/(?:api\/)?resident-app\/deliveries\/photo$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveDeliveryPhotoEndpoint(photoUrl: string, apiBaseUrl: string) {
+  const value = photoUrl.trim();
+  const baseUrl = normalizeApiBaseUrl(apiBaseUrl);
+  const path = /^deliver(?:y|ies)\//i.test(value)
+    ? `/resident-app/deliveries/photo${buildQueryString({ objectName: value })}`
+    : value.startsWith("/")
+      ? value
+      : `/resident-app/deliveries/photo${buildQueryString({ objectName: value })}`;
+
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+
+  if (baseUrl.startsWith("/")) {
+    if (path === baseUrl || path.startsWith(`${baseUrl}/`)) {
+      return path;
+    }
+
+    const relativePath = path.startsWith("/api/")
+      ? path.replace(/^\/api(?=\/)/, "")
+      : path;
+
+    return `${baseUrl}${relativePath}`;
+  }
+
+  const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
+  if (/\/api$/i.test(normalizedBaseUrl) && path.startsWith("/api/")) {
+    return `${normalizedBaseUrl.replace(/\/api$/i, "")}${path}`;
+  }
+
+  return `${normalizedBaseUrl}${path}`;
+}
+
+export async function getDeliveryPhotoBlob(
+  snapshot: Pick<SessionSnapshot, "apiBaseUrl" | "token">,
+  photoUrl: string,
+) {
+  const endpoint = resolveDeliveryPhotoEndpoint(photoUrl, snapshot.apiBaseUrl);
+  return requestBlob(endpoint, {
+    token: snapshot.token,
+  });
+}
+
 export async function getDeliverySettings(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
@@ -2700,6 +2842,8 @@ export async function getDeliverySettings(
     id: 0,
     site_id: snapshot.resident?.site_id ?? 0,
     enabled: true,
+    allow_resident_confirmation: true,
+    allow_resident_contest: true,
     site: snapshot.resident
       ? {
           id: snapshot.resident.site_id,
@@ -2707,26 +2851,39 @@ export async function getDeliverySettings(
         }
       : null,
   };
-
-  if (isResidentAppModuleRequestDisabled(DELIVERIES_MODULE_KEY)) {
-    return fallbackSettings;
-  }
+  const disabledSettings: DeliveryModuleSettings = {
+    ...fallbackSettings,
+    enabled: false,
+    allow_resident_confirmation: false,
+    allow_resident_contest: false,
+  };
 
   if (!isOnlineBackend(snapshot, connectionState)) {
     return readResidentScopedFallback("deliveries-settings", fallbackSettings);
   }
 
   try {
-    const settings = await requestJson<DeliveryModuleSettings>(
-      "/resident-app/deliveries/settings",
-      {
-        baseUrl: snapshot.apiBaseUrl,
-        token: snapshot.token,
-      },
+    const deliveries = normalizeDeliveries(
+      await requestJson<DeliveryEntry[]>(
+        "/resident-app/deliveries",
+        {
+          baseUrl: snapshot.apiBaseUrl,
+          token: snapshot.token,
+        },
+      ),
     );
-    writeCache("deliveries-settings", settings);
-    return settings;
-  } catch {
+    if (snapshot.resident) {
+      writeCache(deliveryCacheKey(snapshot.resident.id), deliveries);
+      writeCache(`deliveries:${snapshot.resident.id}`, deliveries);
+    }
+    writeCache("deliveries-settings", fallbackSettings);
+    return fallbackSettings;
+  } catch (error) {
+    if (isApiStatusError(error, 403)) {
+      writeCache("deliveries-settings", disabledSettings);
+      return disabledSettings;
+    }
+
     return readResidentScopedFallback("deliveries-settings", fallbackSettings);
   }
 }
@@ -2735,26 +2892,70 @@ export async function listDeliveries(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
   resident: ResidentProfile,
+  filters: { status?: DeliveryStatus | "all" | null } = {},
 ) {
-  if (
-    isResidentAppModuleRequestDisabled(DELIVERIES_MODULE_KEY) ||
-    !isOnlineBackend(snapshot, connectionState)
-  ) {
-    return readResidentDeliveriesFallback(resident);
+  if (!isOnlineBackend(snapshot, connectionState)) {
+    return readResidentDeliveries(resident, filters);
   }
 
   try {
-    const deliveries = await requestJson<DeliveryEntry[]>(
-      "/resident-app/deliveries",
+    const deliveries = normalizeDeliveries(
+      await requestJson<DeliveryEntry[]>(
+        `/resident-app/deliveries${buildQueryString({
+          status:
+            filters.status && filters.status !== "all"
+              ? filters.status
+              : undefined,
+        })}`,
+        {
+          baseUrl: snapshot.apiBaseUrl,
+          token: snapshot.token,
+        },
+      ),
+    );
+    writeCache(deliveryCacheKey(resident.id, filters), deliveries);
+    if (!filters.status || filters.status === "all") {
+      writeCache(`deliveries:${resident.id}`, deliveries);
+    }
+    return deliveries;
+  } catch (error) {
+    if (isApiStatusError(error, 403)) {
+      writeCache(deliveryCacheKey(resident.id, filters), [] as DeliveryEntry[]);
+      return [] as DeliveryEntry[];
+    }
+
+    return readResidentDeliveries(resident, filters);
+  }
+}
+
+export async function getDelivery(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  resident: ResidentProfile,
+  deliveryId: number,
+) {
+  if (!isOnlineBackend(snapshot, connectionState)) {
+    return (
+      readResidentDeliveries(resident).find((delivery) => delivery.id === deliveryId) ??
+      null
+    );
+  }
+
+  try {
+    const delivery = await requestJson<DeliveryEntry>(
+      `/resident-app/deliveries/${deliveryId}`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
       },
     );
-    writeCache(`deliveries:${resident.id}`, deliveries);
-    return deliveries;
-  } catch {
-    return readResidentDeliveriesFallback(resident);
+    return upsertDeliveryInCache(resident, delivery);
+  } catch (error) {
+    if (isApiStatusError(error, 403) || isApiStatusError(error, 404)) {
+      return null;
+    }
+
+    throw error;
   }
 }
 
@@ -2766,10 +2967,7 @@ export async function confirmDelivery(
 ) {
   ensureResidentWriteAccess(resident, "A confirmação de recebimento");
 
-  if (
-    isOnlineBackend(snapshot, connectionState) &&
-    !isResidentAppModuleRequestDisabled(DELIVERIES_MODULE_KEY)
-  ) {
+  if (isOnlineBackend(snapshot, connectionState)) {
     const updated = await requestJson<DeliveryEntry>(
       `/resident-app/deliveries/${deliveryId}/confirm`,
       {
@@ -2778,16 +2976,12 @@ export async function confirmDelivery(
         method: "POST",
       },
     );
-    const next = readCache<DeliveryEntry[]>(`deliveries:${resident.id}`, []).map(
-      (delivery) => (delivery.id === updated.id ? { ...delivery, ...updated } : delivery),
-    );
-    writeCache(`deliveries:${resident.id}`, next);
-    return updated;
+    return upsertDeliveryInCache(resident, updated);
   }
 
   const deliveredAt = new Date().toISOString();
   return (
-    updateDeliveryLocally(resident, deliveryId, (delivery) => ({
+    updateDeliveryLocally(resident, deliveryId, (delivery) => normalizeDelivery({
       ...delivery,
       status: "RESIDENT_CONFIRMED",
       delivered_at: deliveredAt,
@@ -2805,10 +2999,7 @@ export async function contestDelivery(
 ) {
   ensureResidentWriteAccess(resident, "A contestação de entregas");
 
-  if (
-    isOnlineBackend(snapshot, connectionState) &&
-    !isResidentAppModuleRequestDisabled(DELIVERIES_MODULE_KEY)
-  ) {
+  if (isOnlineBackend(snapshot, connectionState)) {
     const updated = await requestJson<DeliveryEntry>(
       `/resident-app/deliveries/${deliveryId}/contest`,
       {
@@ -2818,15 +3009,11 @@ export async function contestDelivery(
         body: { reason },
       },
     );
-    const next = readCache<DeliveryEntry[]>(`deliveries:${resident.id}`, []).map(
-      (delivery) => (delivery.id === updated.id ? { ...delivery, ...updated } : delivery),
-    );
-    writeCache(`deliveries:${resident.id}`, next);
-    return updated;
+    return upsertDeliveryInCache(resident, updated);
   }
 
   return (
-    updateDeliveryLocally(resident, deliveryId, (delivery) => ({
+    updateDeliveryLocally(resident, deliveryId, (delivery) => normalizeDelivery({
       ...delivery,
       status: "CONTESTED",
       contest_reason: reason,
@@ -2860,18 +3047,192 @@ export async function getChatSettings(
   }
 
   try {
-    const settings = await requestJson<ChatModuleSettings>(
-      "/resident-app/chat/settings",
+    const status = await requestJson<{
+      enabled: boolean;
+      module: string;
+      tenant_uuid: string;
+    }>(
+      "/chat/app/status",
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
       },
     );
+    const settings: ChatModuleSettings = {
+      ...fallbackSettings,
+      enabled: status.enabled,
+      allow_portaria_chat: false,
+      allow_direct_messages: true,
+      allow_group_creation: false,
+      require_direct_message_approval: false,
+    };
     writeCache("chat-settings", settings);
     return settings;
-  } catch {
+  } catch (error) {
+    if (isApiStatusError(error, 403)) {
+      const disabledSettings = { ...fallbackSettings, enabled: false };
+      writeCache("chat-settings", disabledSettings);
+      return disabledSettings;
+    }
     return readResidentScopedFallback("chat-settings", fallbackSettings);
   }
+}
+
+type ChatAppConversationResponse = {
+  uuid: string;
+  conversation_type: "DIRECT" | "PORTARIA";
+  site_id: number;
+  person_a_id: number;
+  person_b_id: number | null;
+  title?: string | null;
+  status: "OPEN" | "CLOSED" | string;
+  last_message_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatAppMessageResponse = {
+  uuid: string;
+  sender_kind: string;
+  sender_label: string;
+  message_text?: string | null;
+  created_at: string;
+  external_id?: string | null;
+  metadata?: Record<string, unknown>;
+  attachments?: ChatMessage["attachments"];
+};
+
+type ChatAppPersonResponse = {
+  id: number;
+  name: string;
+  site_id: number;
+  site_name?: string | null;
+  conversation_uuid?: string | null;
+  last_message_at?: string | null;
+};
+
+type ChatAppDirectHistoryResponse = {
+  conversation: ChatAppConversationResponse | null;
+  messages: ChatAppMessageResponse[];
+};
+
+type ChatAppPortariaHistoryResponse = ChatAppDirectHistoryResponse;
+
+type ChatAppDirectSendResponse =
+  | ChatAppMessageResponse
+  | {
+      conversation: ChatAppConversationResponse;
+      message: ChatAppMessageResponse;
+    };
+
+type ChatAppPortariaSendResponse = ChatAppDirectSendResponse;
+
+function resolveCurrentPersonId(resident: ResidentProfile) {
+  return resident.person_id ?? resident.id;
+}
+
+function mapChatConversation(
+  conversation: ChatAppConversationResponse,
+  resident: ResidentProfile,
+  counterpart?: Pick<ChatContact, "name" | "site_name"> | null,
+): ChatThread {
+  const currentPersonId = resolveCurrentPersonId(resident);
+  const status = String(conversation.status ?? "").toUpperCase();
+  const counterpartId =
+    conversation.conversation_type === "PORTARIA"
+      ? null
+      :
+    conversation.person_a_id === currentPersonId
+      ? conversation.person_b_id
+      : conversation.person_a_id;
+  const title =
+    cleanOptionalString(conversation.title) ??
+    cleanOptionalString(counterpart?.name) ??
+    (conversation.conversation_type === "PORTARIA"
+      ? "Portaria"
+      : `Pessoa ${counterpartId}`);
+
+  return {
+    id: conversation.uuid,
+    uuid: conversation.uuid,
+    type: conversation.conversation_type === "PORTARIA" ? "PORTARIA" : "DIRECT",
+    status: status === "OPEN" ? "ACTIVE" : "CLOSED",
+    site_id: conversation.site_id,
+    site_name: counterpart?.site_name ?? resident.site_name,
+    title,
+    counterpart_label:
+      cleanOptionalString(counterpart?.name) ??
+      (conversation.conversation_type === "PORTARIA"
+        ? "Portaria"
+        : `Pessoa ${counterpartId}`),
+    counterpart_unit_label: null,
+    counterpart_avatar_label: buildResidentAvatar(title),
+    last_message_preview: "",
+    last_message_at: conversation.last_message_at ?? conversation.updated_at,
+    last_sender_label: null,
+    unread_count: 0,
+    requires_my_approval: false,
+    can_reply: status === "OPEN",
+    can_block: false,
+    can_approve: false,
+    can_reject: false,
+    blocked_by_me: false,
+    pending_other_approval: false,
+    allow_portaria_chat: false,
+    allow_group_creation: false,
+  };
+}
+
+function mapChatMessage(
+  message: ChatAppMessageResponse,
+  resident: ResidentProfile,
+): ChatMessage {
+  const isAppSender = String(message.sender_kind ?? "").trim().toUpperCase() === "APP";
+  const senderLabel = isAppSender
+    ? "Portaria"
+    : cleanOptionalString(message.sender_label) ?? "Pessoa";
+  return {
+    id: message.uuid,
+    uuid: message.uuid,
+    text: String(message.message_text ?? ""),
+    created_at: message.created_at,
+    sender_kind: message.sender_kind,
+    sender_label: senderLabel,
+    sender_avatar_label: isAppSender ? "PT" : buildResidentAvatar(senderLabel),
+    sender_role: isAppSender
+      ? "Portaria"
+      : message.sender_kind === "PERSON"
+        ? "Pessoa"
+        : null,
+    is_me:
+      !isAppSender &&
+      senderLabel.trim().toLowerCase() === resident.name.trim().toLowerCase(),
+    external_id: message.external_id ?? null,
+    metadata: message.metadata ?? {},
+    attachments: message.attachments ?? [],
+  };
+}
+
+function mapChatPerson(person: ChatAppPersonResponse): ChatContact {
+  return {
+    person_id: person.id,
+    name: person.name,
+    site_id: person.site_id,
+    site_name: person.site_name ?? null,
+    conversation_uuid: person.conversation_uuid ?? null,
+    last_message_at: person.last_message_at ?? null,
+    unit_label: person.site_name ?? null,
+    avatar_label: buildResidentAvatar(person.name),
+  };
+}
+
+function buildChatSiteSearchParams(siteId?: number | null) {
+  const params = new URLSearchParams();
+  if (siteId && Number.isFinite(siteId) && siteId > 0) {
+    params.set("site_id", String(siteId));
+  }
+  const queryString = params.toString();
+  return queryString ? `?${queryString}` : "";
 }
 
 export async function listChatThreads(
@@ -2886,12 +3247,15 @@ export async function listChatThreads(
   }
 
   try {
-    const threads = await requestJson<ChatThread[]>(
-      "/resident-app/chat/threads",
+    const conversations = await requestJson<ChatAppConversationResponse[]>(
+      "/chat/app/conversations",
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
       },
+    );
+    const threads = conversations.map((conversation) =>
+      mapChatConversation(conversation, resident),
     );
     writeCache(`chat-threads:${resident.id}`, threads);
     return threads;
@@ -2904,17 +3268,28 @@ export async function listChatContacts(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
   resident: ResidentProfile,
+  options: {
+    search?: string;
+    siteId?: number | null;
+    limit?: number;
+  } = {},
 ) {
   const previewContacts = readPreviewState()
     .residents.filter(
       (candidate) =>
         candidate.id !== resident.id &&
         candidate.site_id === resident.site_id &&
-        candidate.role === "MORADOR",
+        candidate.role === "MORADOR" &&
+        (!options.search ||
+          candidate.name.toLowerCase().includes(options.search.toLowerCase())),
     )
     .map((candidate) => ({
       person_id: candidate.id,
       name: candidate.name,
+      site_id: candidate.site_id,
+      site_name: candidate.site_name,
+      conversation_uuid: null,
+      last_message_at: null,
       unit_label: candidate.unit_label ?? null,
       avatar_label: candidate.avatar,
     }));
@@ -2924,13 +3299,307 @@ export async function listChatContacts(
   }
 
   try {
-    return await requestJson<ChatContact[]>("/resident-app/chat/contacts", {
-      baseUrl: snapshot.apiBaseUrl,
-      token: snapshot.token,
-    });
+    const params = new URLSearchParams();
+    const search = cleanOptionalString(options.search);
+    if (search) {
+      params.set("search", search);
+    }
+    if (options.siteId && Number.isFinite(options.siteId) && options.siteId > 0) {
+      params.set("site_id", String(options.siteId));
+    }
+    params.set("limit", String(Math.min(Math.max(options.limit ?? 30, 1), 50)));
+
+    const people = await requestJson<ChatAppPersonResponse[]>(
+      `/chat/app/people?${params.toString()}`,
+      {
+        baseUrl: snapshot.apiBaseUrl,
+        token: snapshot.token,
+      },
+    );
+    return people.map(mapChatPerson);
   } catch {
     return previewContacts;
   }
+}
+
+export async function listChatDirectMessages(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  resident: ResidentProfile,
+  targetPerson: ChatContact,
+) {
+  const previewThread = readPreviewState().chats.find(
+    (thread) =>
+      thread.type === "DIRECT" &&
+      (thread.id === targetPerson.conversation_uuid ||
+        thread.counterpart_label === targetPerson.name),
+  );
+  const previewMessages = previewThread?.messages ?? [];
+
+  if (!isOnlineBackend(snapshot, connectionState)) {
+    return {
+      conversation: previewThread ?? null,
+      messages: previewMessages,
+    };
+  }
+
+  try {
+    const history = await requestJson<ChatAppDirectHistoryResponse>(
+      `/chat/app/people/${targetPerson.person_id}/messages${buildChatSiteSearchParams(
+        targetPerson.site_id,
+      )}`,
+      {
+        baseUrl: snapshot.apiBaseUrl,
+        token: snapshot.token,
+      },
+    );
+    return {
+      conversation: history.conversation
+        ? mapChatConversation(history.conversation, resident, targetPerson)
+        : null,
+      messages: history.messages.map((message) => mapChatMessage(message, resident)),
+    };
+  } catch {
+    return {
+      conversation: previewThread ?? null,
+      messages: previewMessages,
+    };
+  }
+}
+
+function previewEnsureDirectThread(
+  resident: ResidentProfile,
+  targetPerson: ChatContact,
+) {
+  const current = readPreviewState().chats.find(
+    (thread) =>
+      thread.type === "DIRECT" &&
+      thread.site_id === (targetPerson.site_id ?? resident.site_id) &&
+      thread.counterpart_label === targetPerson.name,
+  );
+  if (current) {
+    return current;
+  }
+
+  const now = new Date().toISOString();
+  const thread: ChatThread = {
+    id: generateId(),
+    type: "DIRECT",
+    status: "ACTIVE",
+    site_id: targetPerson.site_id ?? resident.site_id,
+    site_name: targetPerson.site_name ?? resident.site_name,
+    title: targetPerson.name,
+    counterpart_label: targetPerson.name,
+    counterpart_unit_label: targetPerson.unit_label ?? null,
+    counterpart_avatar_label: targetPerson.avatar_label,
+    last_message_preview: "",
+    last_message_at: now,
+    last_sender_label: null,
+    unread_count: 0,
+    requires_my_approval: false,
+    can_reply: true,
+    can_block: false,
+    can_approve: false,
+    can_reject: false,
+    blocked_by_me: false,
+    pending_other_approval: false,
+    messages: [],
+  };
+  const next = upsertPreviewState("chats", (threads) => [thread, ...threads]);
+  writeCache(`chat-threads:${resident.id}`, next);
+  return thread;
+}
+
+export async function sendDirectChatMessage(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  resident: ResidentProfile,
+  targetPerson: ChatContact,
+  messageText: string,
+  attachment?: File | null,
+) {
+  const normalizedMessage = String(messageText ?? "").trim();
+  if (!normalizedMessage && !attachment) {
+    throw new Error("Informe uma mensagem ou anexe um arquivo.");
+  }
+
+  if (canAttemptBackendRequest(snapshot)) {
+    try {
+      const formData = new FormData();
+      if (normalizedMessage) {
+        formData.append("message_text", normalizedMessage);
+      }
+      if (targetPerson.site_id) {
+        formData.append("site_id", String(targetPerson.site_id));
+      }
+      if (attachment) {
+        formData.append("attachment", attachment);
+      }
+
+      const response = await requestForm<ChatAppDirectSendResponse>(
+        `/chat/app/people/${targetPerson.person_id}/messages`,
+        {
+          baseUrl: snapshot.apiBaseUrl,
+          token: snapshot.token,
+          method: "POST",
+          formData,
+        },
+      );
+      const message = "message" in response ? response.message : response;
+      return mapChatMessage(message, resident);
+    } catch (error) {
+      if (
+        snapshot.mode === "backend" &&
+        (connectionState === "online" || !isApiConnectionError(error))
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  const thread = previewEnsureDirectThread(resident, targetPerson);
+  return sendChatMessage(
+    snapshot,
+    connectionState,
+    resident,
+    thread.id,
+    normalizedMessage,
+    attachment,
+  );
+}
+
+export async function listChatPortariaMessages(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  resident: ResidentProfile,
+  siteId: number,
+) {
+  const previewThread = readPreviewState().chats.find(
+    (thread) => thread.type === "PORTARIA" && thread.site_id === siteId,
+  );
+  const previewMessages = previewThread?.messages ?? [];
+
+  if (!isOnlineBackend(snapshot, connectionState)) {
+    return {
+      conversation: previewThread ?? null,
+      messages: previewMessages,
+    };
+  }
+
+  try {
+    const history = await requestJson<ChatAppPortariaHistoryResponse>(
+      `/chat/app/portaria/messages${buildChatSiteSearchParams(siteId)}`,
+      {
+        baseUrl: snapshot.apiBaseUrl,
+        token: snapshot.token,
+      },
+    );
+    return {
+      conversation: history.conversation
+        ? mapChatConversation(history.conversation, resident, {
+            name: "Portaria",
+            site_name: resident.site_name,
+          })
+        : null,
+      messages: history.messages.map((message) => mapChatMessage(message, resident)),
+    };
+  } catch {
+    return {
+      conversation: previewThread ?? null,
+      messages: previewMessages,
+    };
+  }
+}
+
+export async function sendPortariaChatMessage(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  resident: ResidentProfile,
+  siteId: number,
+  messageText: string,
+  attachment?: File | null,
+) {
+  const normalizedMessage = String(messageText ?? "").trim();
+  if (!normalizedMessage && !attachment) {
+    throw new Error("Informe uma mensagem ou anexe um arquivo.");
+  }
+
+  if (canAttemptBackendRequest(snapshot)) {
+    try {
+      const formData = new FormData();
+      if (normalizedMessage) {
+        formData.append("message_text", normalizedMessage);
+      }
+      formData.append("site_id", String(siteId));
+      if (attachment) {
+        formData.append("attachment", attachment);
+      }
+
+      const response = await requestForm<ChatAppPortariaSendResponse>(
+        "/chat/app/portaria/messages",
+        {
+          baseUrl: snapshot.apiBaseUrl,
+          token: snapshot.token,
+          method: "POST",
+          formData,
+        },
+      );
+      const message = "message" in response ? response.message : response;
+      return mapChatMessage(message, resident);
+    } catch (error) {
+      if (
+        snapshot.mode === "backend" &&
+        (connectionState === "online" || !isApiConnectionError(error))
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  const thread =
+    readPreviewState().chats.find(
+      (candidate) => candidate.type === "PORTARIA" && candidate.site_id === siteId,
+    ) ??
+    createPreviewPortariaThread(resident, siteId);
+
+  return sendChatMessage(
+    snapshot,
+    connectionState,
+    resident,
+    thread.id,
+    normalizedMessage,
+    attachment,
+  );
+}
+
+function createPreviewPortariaThread(resident: ResidentProfile, siteId: number) {
+  const now = new Date().toISOString();
+  const thread: ChatThread = {
+    id: generateId(),
+    type: "PORTARIA",
+    status: "ACTIVE",
+    site_id: siteId,
+    site_name: resident.site_name,
+    title: "Portaria",
+    counterpart_label: "Portaria",
+    counterpart_unit_label: null,
+    counterpart_avatar_label: "PT",
+    last_message_preview: "",
+    last_message_at: now,
+    last_sender_label: null,
+    unread_count: 0,
+    requires_my_approval: false,
+    can_reply: true,
+    can_block: false,
+    can_approve: false,
+    can_reject: false,
+    blocked_by_me: false,
+    pending_other_approval: false,
+    messages: [],
+  };
+  const next = upsertPreviewState("chats", (threads) => [thread, ...threads]);
+  writeCache(`chat-threads:${resident.id}`, next);
+  return thread;
 }
 
 export async function createChatThread(
@@ -2940,20 +3609,50 @@ export async function createChatThread(
   input: {
     type: "PORTARIA" | "DIRECT";
     recipient_person_id?: number;
+    target_person_id?: number;
+    site_id?: number;
+    title?: string;
+    metadata?: Record<string, unknown>;
     message_text?: string;
   },
 ) {
+  if (input.type !== "DIRECT") {
+    throw new Error("O backend atual do chat aceita apenas conversas diretas 1:1.");
+  }
+
   if (canAttemptBackendRequest(snapshot)) {
     try {
-      const thread = await requestJson<ChatThread>("/resident-app/chat/threads", {
-        baseUrl: snapshot.apiBaseUrl,
-        token: snapshot.token,
-        method: "POST",
-        body: input,
-      });
+      const targetPersonId = input.target_person_id ?? input.recipient_person_id;
+      if (!targetPersonId) {
+        throw new Error("Informe a pessoa destino da conversa.");
+      }
+      const conversation = await requestJson<ChatAppConversationResponse>(
+        "/chat/app/conversations/direct",
+        {
+          baseUrl: snapshot.apiBaseUrl,
+          token: snapshot.token,
+          method: "POST",
+          body: {
+            target_person_id: targetPersonId,
+            ...(input.site_id ? { site_id: input.site_id } : {}),
+            ...(cleanOptionalString(input.title) ? { title: input.title?.trim() } : {}),
+            ...(input.metadata ? { metadata: input.metadata } : {}),
+          },
+        },
+      );
+      const thread = mapChatConversation(conversation, resident);
       const next = upsertChatThreadInCache(resident.id, thread);
       if (snapshot.mode === "preview") {
         upsertPreviewState("chats", () => next);
+      }
+      if (cleanOptionalString(input.message_text)) {
+        await sendChatMessage(
+          snapshot,
+          connectionState,
+          resident,
+          thread.id,
+          input.message_text ?? "",
+        );
       }
       return thread;
     } catch (error) {
@@ -3018,7 +3717,7 @@ export async function listChatMessages(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
   resident: ResidentProfile,
-  threadId: number,
+  threadId: number | string,
 ) {
   const previewThread = readPreviewState().chats.find((thread) => thread.id === threadId);
   const previewMessages = previewThread?.messages ?? [];
@@ -3028,13 +3727,14 @@ export async function listChatMessages(
   }
 
   try {
-    return await requestJson<ChatMessage[]>(
-      `/resident-app/chat/threads/${threadId}/messages`,
+    const messages = await requestJson<ChatAppMessageResponse[]>(
+      `/chat/app/conversations/${threadId}/messages`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
       },
     );
+    return messages.map((message) => mapChatMessage(message, resident));
   } catch {
     return previewMessages;
   }
@@ -3044,30 +3744,35 @@ export async function sendChatMessage(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
   resident: ResidentProfile,
-  threadId: number,
+  threadId: number | string,
   messageText: string,
+  attachment?: File | null,
 ) {
   const normalizedMessage = String(messageText ?? "").trim();
-  if (!normalizedMessage) {
-    throw new Error("Informe a mensagem do chat.");
+  if (!normalizedMessage && !attachment) {
+    throw new Error("Informe uma mensagem ou anexe um arquivo.");
   }
 
   if (canAttemptBackendRequest(snapshot)) {
     try {
-      const thread = await requestJson<ChatThread>(
-        `/resident-app/chat/threads/${threadId}/messages`,
+      const formData = new FormData();
+      if (normalizedMessage) {
+        formData.append("message_text", normalizedMessage);
+      }
+      if (attachment) {
+        formData.append("attachment", attachment);
+      }
+
+      const message = await requestForm<ChatAppMessageResponse>(
+        `/chat/app/conversations/${threadId}/messages`,
         {
           baseUrl: snapshot.apiBaseUrl,
           token: snapshot.token,
           method: "POST",
-          body: { message_text: normalizedMessage },
+          formData,
         },
       );
-      const next = upsertChatThreadInCache(resident.id, thread);
-      if (snapshot.mode === "preview") {
-        upsertPreviewState("chats", () => next);
-      }
-      return thread;
+      return mapChatMessage(message, resident);
     } catch (error) {
       if (
         snapshot.mode === "backend" &&
@@ -3104,6 +3809,23 @@ export async function sendChatMessage(
   );
   writeCache(`chat-threads:${resident.id}`, next);
   return next.find((thread) => thread.id === threadId) ?? null;
+}
+
+export function buildChatAttachmentUrl(
+  snapshot: SessionSnapshot,
+  attachmentUuid: string,
+) {
+  const resolvedBaseUrl = normalizeApiBaseUrl(snapshot.apiBaseUrl);
+  return `${resolvedBaseUrl}/chat/app/attachments/${attachmentUuid}`;
+}
+
+export async function downloadChatAttachment(
+  snapshot: SessionSnapshot,
+  attachmentUuid: string,
+) {
+  return requestBlob(buildChatAttachmentUrl(snapshot, attachmentUuid), {
+    token: snapshot.token,
+  });
 }
 
 export async function approveChatThread(

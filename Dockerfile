@@ -12,6 +12,7 @@
 # Build args:
 #   VITE_API_URL  — URL da API central acessível pelo navegador do celular
 #   VITE_APP_MODE — modo inicial do app (`backend` ou `preview`)
+#   VITE_APP_BASE_PATH — base path do app quando publicado atrás de proxy
 # =============================================================================
 
 # --- Stage 1: dependencies --------------------------------------------------
@@ -41,8 +42,10 @@ FROM deps AS builder
 
 ARG VITE_API_URL=
 ARG VITE_APP_MODE=backend
+ARG VITE_APP_BASE_PATH=/
 ENV VITE_API_URL=${VITE_API_URL}
 ENV VITE_APP_MODE=${VITE_APP_MODE}
+ENV VITE_APP_BASE_PATH=${VITE_APP_BASE_PATH}
 
 COPY . .
 RUN npm run build

@@ -425,6 +425,7 @@ export interface DeliveryEntry {
   id: number;
   site_id?: number;
   target_scope?: "PERSON" | "APARTMENT";
+  target_person_id?: number | null;
   description: string;
   notes?: string | null;
   arrived_at: string;
@@ -434,6 +435,8 @@ export interface DeliveryEntry {
   contest_deadline_at?: string | null;
   contest_reason?: string | null;
   can_contest?: boolean;
+  arrival_photo_url?: string | null;
+  pickup_photo_url?: string | null;
   target_unit_label?: string | null;
   recipient_label?: string | null;
   site?: {
@@ -459,6 +462,8 @@ export interface DeliveryModuleSettings {
   id: number;
   site_id: number;
   enabled: boolean;
+  allow_resident_confirmation?: boolean;
+  allow_resident_contest?: boolean;
   site?: {
     id: number;
     name: string;
@@ -485,12 +490,17 @@ export interface ChatModuleSettings {
 export interface ChatContact {
   person_id: number;
   name: string;
+  site_id?: number | null;
+  site_name?: string | null;
+  conversation_uuid?: string | null;
+  last_message_at?: string | null;
   unit_label?: string | null;
   avatar_label: string;
 }
 
 export interface ChatMessage {
   id: number | string;
+  uuid?: string;
   text: string;
   created_at: string;
   sender_kind: string;
@@ -498,10 +508,14 @@ export interface ChatMessage {
   sender_avatar_label: string;
   sender_role?: string | null;
   is_me: boolean;
+  external_id?: string | null;
+  metadata?: Record<string, unknown>;
+  attachments?: ChatAttachment[];
 }
 
 export interface ChatThread {
-  id: number;
+  id: number | string;
+  uuid?: string;
   type: ChatThreadType;
   status: ChatThreadStatus;
   site_id: number;
@@ -524,6 +538,14 @@ export interface ChatThread {
   allow_portaria_chat?: boolean;
   allow_group_creation?: boolean;
   messages?: ChatMessage[];
+}
+
+export interface ChatAttachment {
+  uuid: string;
+  file_kind: string;
+  mime_type: string;
+  original_name: string;
+  file_size_bytes: number;
 }
 
 export interface PendingAction {

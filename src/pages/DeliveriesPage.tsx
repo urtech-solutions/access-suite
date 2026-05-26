@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  Camera,
   CheckCircle2,
   Clock3,
   Package,
@@ -19,9 +20,13 @@ import { PageHeader } from "@/features/shared/PageHeader";
 import {
   confirmDelivery,
   contestDelivery,
+  getDeliveryPhotoBlob,
   getDeliverySettings,
+  isProtectedDeliveryPhotoUrl,
   listDeliveries,
+  normalizeApiBaseUrl,
 } from "@/services/mobile-app.service";
+import type { DeliveryEntry, SessionSnapshot } from "@/services/mobile-app.types";
 
 function formatDateTime(value?: string | null) {
   if (!value) return "-";
@@ -56,6 +61,111 @@ function DeliveryRecipientCallout({
         Nome informado pela portaria no momento da entrega
         {deliveredAt ? ` em ${formatDateTime(deliveredAt)}` : "."}
       </p>
+    </div>
+  );
+}
+
+function resolveDeliveryPhotoUrl(photoUrl: string | null | undefined, apiBaseUrl: string) {
+  if (!photoUrl) return undefined;
+  if (/^https?:\/\//i.test(photoUrl) || /^(blob|data):/i.test(photoUrl)) {
+    return photoUrl;
+  }
+  const base = normalizeApiBaseUrl(apiBaseUrl).replace(/\/api$/, "");
+  return `${base}${photoUrl}`;
+}
+
+function DeliveryPhoto({
+  photoUrl,
+  label,
+  snapshot,
+}: {
+  photoUrl: string;
+  label: string;
+  snapshot: SessionSnapshot;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const { apiBaseUrl, token } = snapshot;
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    setSrc(null);
+
+    if (!isProtectedDeliveryPhotoUrl(photoUrl)) {
+      setSrc(resolveDeliveryPhotoUrl(photoUrl, apiBaseUrl) ?? null);
+      return undefined;
+    }
+
+    void getDeliveryPhotoBlob({ apiBaseUrl, token }, photoUrl)
+      .then((blob) => {
+        const nextUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(nextUrl);
+          return;
+        }
+        objectUrl = nextUrl;
+        setSrc(nextUrl);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSrc(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [apiBaseUrl, photoUrl, token]);
+
+  if (!src) {
+    return null;
+  }
+
+  return (
+    <figure className="min-w-0 overflow-hidden rounded-2xl border border-border bg-background">
+      <img src={src} alt={label} className="h-28 w-full object-cover" />
+      <figcaption className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground">
+        <Camera className="h-3.5 w-3.5" />
+        {label}
+      </figcaption>
+    </figure>
+  );
+}
+
+function DeliveryPhotoStrip({
+  delivery,
+  snapshot,
+}: {
+  delivery: DeliveryEntry;
+  snapshot: SessionSnapshot;
+}) {
+  const photos = [
+    delivery.arrival_photo_url
+      ? { url: delivery.arrival_photo_url, label: "Chegada" }
+      : null,
+    delivery.pickup_photo_url
+      ? { url: delivery.pickup_photo_url, label: "Retirada" }
+      : null,
+  ].filter((item): item is { url: string; label: string } => Boolean(item));
+
+  if (photos.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 grid grid-cols-2 gap-3">
+      {photos.map((photo) => (
+        <DeliveryPhoto
+          key={`${delivery.id}-${photo.label}`}
+          photoUrl={photo.url}
+          label={`Comprovante de ${photo.label.toLowerCase()}`}
+          snapshot={snapshot}
+        />
+      ))}
     </div>
   );
 }
@@ -112,7 +222,10 @@ const DeliveriesPage = () => {
       ),
   });
 
-  const deliveries = deliveriesQuery.data ?? [];
+  const deliveries = useMemo(
+    () => deliveriesQuery.data ?? [],
+    [deliveriesQuery.data],
+  );
 
   const arrivedDeliveries = useMemo(
     () => deliveries.filter((delivery) => delivery.status === "ARRIVED"),
@@ -232,6 +345,7 @@ const DeliveriesPage = () => {
                       {delivery.notes}
                     </p>
                   ) : null}
+                  <DeliveryPhotoStrip delivery={delivery} snapshot={snapshot} />
                 </div>
                 <Badge variant="warning" className="gap-1.5">
                   <Clock3 className="h-3 w-3" />
@@ -290,6 +404,7 @@ const DeliveriesPage = () => {
                     deliveredToName={delivery.delivered_to_name}
                     deliveredAt={delivery.delivered_at}
                   />
+                  <DeliveryPhotoStrip delivery={delivery} snapshot={snapshot} />
                 </div>
                 <Badge variant="secondary" className="gap-1.5">
                   <Truck className="h-3 w-3" />
@@ -389,6 +504,7 @@ const DeliveriesPage = () => {
                     deliveredToName={delivery.delivered_to_name}
                     deliveredAt={delivery.delivered_at}
                   />
+                  <DeliveryPhotoStrip delivery={delivery} snapshot={snapshot} />
                   {delivery.contest_reason ? (
                     <p className="mt-1 text-sm text-destructive">
                       {delivery.contest_reason}

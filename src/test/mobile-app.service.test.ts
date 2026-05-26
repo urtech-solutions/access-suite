@@ -3,16 +3,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { demoResidents } from "@/data/demo-data";
 import {
   cancelVisitor,
+  confirmDelivery,
   connectBackendSession,
+  contestDelivery,
   createBulletin,
   createIncident,
   createReservation,
   createVisitor,
   disconnectBackendSession,
   getDeliverySettings,
+  getDeliveryPhotoBlob,
+  getDelivery,
   getBulletinImageBlob,
   getBulletinModuleStatus,
   getIncidentSettings,
+  isProtectedDeliveryPhotoUrl,
   isProtectedBulletinImageUrl,
   getVisitorSettings,
   hydrateBackendSession,
@@ -420,7 +425,7 @@ describe("mobile-app service", () => {
     expect(readPreviewState().visitors[0].status).toBe("CANCELLED");
   });
 
-  it("serves disabled resident modules from local state without backend requests", async () => {
+  it("serves locally disabled resident modules from local state without backend requests", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
@@ -442,11 +447,226 @@ describe("mobile-app service", () => {
       enabled: true,
     });
     await expect(listVisitors(snapshot, "online", resident)).resolves.not.toHaveLength(0);
-    await expect(getDeliverySettings(snapshot, "online")).resolves.toMatchObject({
-      enabled: true,
-    });
-    await expect(listDeliveries(snapshot, "online", resident)).resolves.not.toHaveLength(0);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("loads deliveries through the resident-app API with optional status filter", async () => {
+    const snapshot: SessionSnapshot = {
+      mode: "backend",
+      apiBaseUrl: "http://localhost:3000",
+      resident,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: null,
+        contexts: [],
+      },
+      token: "access-token",
+      refreshToken: null,
+    };
+    const deliveries = [
+      {
+        id: 8801,
+        site_id: resident.site_id,
+        target_scope: "PERSON",
+        target_person_id: resident.id,
+        description: "Envelope",
+        arrived_at: "2026-05-26T12:00:00.000Z",
+        status: "OPERATOR_DELIVERED",
+        delivered_at: "2026-05-26T12:30:00.000Z",
+        contest_deadline_at: "2999-05-26T12:30:00.000Z",
+        arrival_photo_url:
+          "/api/resident-app/deliveries/photo?objectName=deliveries%2Ftenant%2Farrival.jpg",
+      },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
+      json: async () => deliveries,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      listDeliveries(snapshot, "online", resident, {
+        status: "OPERATOR_DELIVERED",
+      }),
+    ).resolves.toMatchObject([{ id: 8801, can_contest: true }]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/resident-app/deliveries?status=OPERATOR_DELIVERED",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Bearer access-token",
+        }),
+      }),
+    );
+  });
+
+  it("treats delivery module 403 as disabled instead of showing cached deliveries", async () => {
+    const snapshot: SessionSnapshot = {
+      mode: "backend",
+      apiBaseUrl: "http://localhost:3000",
+      resident,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: null,
+        contexts: [],
+      },
+      token: "access-token",
+      refreshToken: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
+      json: async () => ({ message: "Modulo DELIVERIES inativo." }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getDeliverySettings(snapshot, "online")).resolves.toMatchObject({
+      enabled: false,
+    });
+    await expect(listDeliveries(snapshot, "online", resident)).resolves.toEqual([]);
+  });
+
+  it("details, confirms and contests deliveries through the resident-app API", async () => {
+    const snapshot: SessionSnapshot = {
+      mode: "backend",
+      apiBaseUrl: "http://localhost:3000",
+      resident,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: null,
+        contexts: [],
+      },
+      token: "access-token",
+      refreshToken: null,
+    };
+    const detail = {
+      id: 8802,
+      site_id: resident.site_id,
+      target_scope: "APARTMENT",
+      description: "Caixa",
+      arrived_at: "2026-05-26T12:00:00.000Z",
+      status: "OPERATOR_DELIVERED",
+      contest_deadline_at: "2999-05-26T12:30:00.000Z",
+    };
+    const confirmed = { ...detail, status: "RESIDENT_CONFIRMED" };
+    const contested = {
+      ...detail,
+      status: "CONTESTED",
+      contest_reason: "Foi marcado como retirado, mas nao recebi.",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "application/json" : null,
+        },
+        json: async () => detail,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "application/json" : null,
+        },
+        json: async () => confirmed,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "application/json" : null,
+        },
+        json: async () => contested,
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getDelivery(snapshot, "online", resident, 8802)).resolves.toMatchObject({
+      id: 8802,
+    });
+    await expect(
+      confirmDelivery(snapshot, "online", resident, 8802),
+    ).resolves.toMatchObject({ status: "RESIDENT_CONFIRMED" });
+    await expect(
+      contestDelivery(
+        snapshot,
+        "online",
+        resident,
+        8802,
+        "Foi marcado como retirado, mas nao recebi.",
+      ),
+    ).resolves.toMatchObject({ status: "CONTESTED" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://localhost:3000/resident-app/deliveries/8802",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://localhost:3000/resident-app/deliveries/8802/confirm",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://localhost:3000/resident-app/deliveries/8802/contest",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          reason: "Foi marcado como retirado, mas nao recebi.",
+        }),
+      }),
+    );
+  });
+
+  it("loads protected delivery photos with the person app bearer token", async () => {
+    const imageBlob = new Blob(["image-bytes"], { type: "image/jpeg" });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: () => "image/jpeg",
+      },
+      blob: async () => imageBlob,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      getDeliveryPhotoBlob(
+        { apiBaseUrl: "/api", token: "access-token" },
+        "deliveries/tenant-uuid/2026/05/pickup.jpg",
+      ),
+    ).resolves.toBe(imageBlob);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/resident-app/deliveries/photo?objectName=deliveries%2Ftenant-uuid%2F2026%2F05%2Fpickup.jpg",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Bearer access-token",
+        }),
+      }),
+    );
+    expect(
+      isProtectedDeliveryPhotoUrl(
+        "/api/resident-app/deliveries/photo?objectName=deliveries/tenant-uuid/2026/05/pickup.jpg",
+      ),
+    ).toBe(true);
   });
 
   it("creates reservations through the resident-app API with local datetimes", async () => {

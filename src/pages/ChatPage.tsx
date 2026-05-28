@@ -7,6 +7,7 @@ import {
   Headphones,
   MessageCircle,
   Paperclip,
+  Phone,
   Search,
   Send,
   Wifi,
@@ -17,7 +18,16 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useChatCalls } from "@/features/chat-calls/useChatCalls";
 import { useSession } from "@/features/session/SessionProvider";
 import { PageHeader } from "@/features/shared/PageHeader";
 import {
@@ -310,6 +320,14 @@ function isPortariaSearch(value: string) {
   return /^(portaria|pwa|atendimento)$/i.test(value.trim());
 }
 
+function getTargetKey(target: ChatTarget) {
+  if (target.type === "PORTARIA") {
+    return `PORTARIA:${target.site_id}`;
+  }
+
+  return `PERSON:${target.site_id}:${target.targetPersonId}`;
+}
+
 function isEventForTarget(event: ChatMessageCreatedEvent, target: ChatTarget) {
   if (target.type === "PORTARIA") {
     return (
@@ -327,10 +345,21 @@ function isEventForTarget(event: ChatMessageCreatedEvent, target: ChatTarget) {
 
 export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const selectedTargetRef = useRef<ChatTarget | null>(null);
+  const lastScrollStateRef = useRef({
+    targetKey: "",
+    messageCount: 0,
+    lastMessageId: "",
+    historyLoading: false,
+  });
   const residentNameRef = useRef("");
   const { resident, snapshot, connectionState, isAuthenticated } = useSession();
+  const {
+    socketStatus: callSocketStatus,
+    startPortariaCall,
+  } = useChatCalls();
   const socketBaseUrl = useMemo(
     () => resolveSocketBaseUrl(snapshot.apiBaseUrl),
     [snapshot.apiBaseUrl],
@@ -353,6 +382,7 @@ export default function ChatPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
   const [search, setSearch] = useState("");
+  const [callConfirmOpen, setCallConfirmOpen] = useState(false);
 
   const currentPersonId = resident.person_id ?? resident.id;
   const socketReady = socketStatus === "ready" && Boolean(socketRef.current?.connected);
@@ -511,6 +541,12 @@ export default function ChatPage() {
   useEffect(() => {
     if (!selectedTarget) {
       setHistory({ conversation: null, messages: [] });
+      lastScrollStateRef.current = {
+        targetKey: "",
+        messageCount: 0,
+        lastMessageId: "",
+        historyLoading: false,
+      };
       return undefined;
     }
 
@@ -536,6 +572,46 @@ export default function ChatPage() {
       cancelled = true;
     };
   }, [selectedTarget, socketReady]);
+
+  useEffect(() => {
+    if (!selectedTarget) return undefined;
+
+    const targetKey = getTargetKey(selectedTarget);
+    const lastMessage = history.messages[history.messages.length - 1];
+    const lastMessageId = lastMessage?.id ?? lastMessage?.uuid ?? "";
+    const previous = lastScrollStateRef.current;
+    const targetChanged = previous.targetKey !== targetKey;
+    const messageChanged =
+      previous.messageCount !== history.messages.length ||
+      previous.lastMessageId !== lastMessageId;
+    const canAnimate =
+      !targetChanged &&
+      !previous.historyLoading &&
+      !historyLoading &&
+      previous.messageCount > 0 &&
+      messageChanged;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const behavior: ScrollBehavior = canAnimate && !reduceMotion ? "smooth" : "auto";
+
+    lastScrollStateRef.current = {
+      targetKey,
+      messageCount: history.messages.length,
+      lastMessageId,
+      historyLoading,
+    };
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      const container = messagesContainerRef.current;
+      if (!container) return;
+
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior,
+      });
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [history.messages, historyLoading, selectedTarget]);
 
   async function loadTargetHistory(target: ChatTarget): Promise<HistoryState> {
     if (target.type === "PERSON") {
@@ -771,14 +847,35 @@ export default function ChatPage() {
     }
   }
 
+  function resolvePortariaConversationUuid() {
+    const conversationUuid = history.conversation?.uuid ?? history.conversation?.id;
+    return typeof conversationUuid === "string" ? conversationUuid : "";
+  }
+
+  async function handleStartPortariaCall() {
+    if (!selectedTarget || selectedTarget.type !== "PORTARIA") {
+      toast.message("Chamadas de voz estão disponíveis para a Portaria.");
+      return;
+    }
+
+    const conversationUuid = resolvePortariaConversationUuid();
+    if (!conversationUuid) {
+      toast.error("Abra uma conversa com a Portaria antes de ligar.");
+      return;
+    }
+
+    await startPortariaCall(conversationUuid);
+    setCallConfirmOpen(false);
+  }
+
   if (selectedTarget) {
     const canReply = history.conversation?.can_reply ?? true;
     const targetName = getTargetName(selectedTarget);
     const targetSiteName = getTargetSiteName(selectedTarget);
 
     return (
-      <div className="flex h-screen max-w-md flex-col">
-        <div className="bg-primary px-4 pb-4 pt-8 text-primary-foreground">
+      <div className="flex h-[calc(100dvh_-_4.25rem_-_env(safe-area-inset-top,0px)_-_env(safe-area-inset-bottom,0px))] max-w-md flex-col overflow-hidden">
+        <div className="sticky top-0 z-20 shrink-0 bg-primary px-4 pb-4 pt-8 text-primary-foreground">
           <div className="flex items-start gap-3">
             <Button
               variant="ghost"
@@ -796,6 +893,31 @@ export default function ChatPage() {
                   : targetSiteName ?? "Conversa direta"}
               </p>
             </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="shrink-0 rounded-full text-primary-foreground hover:bg-primary-foreground/10"
+              aria-label="Chamada de voz"
+              title="Chamada de voz"
+              onClick={() => {
+                if (selectedTarget.type !== "PORTARIA") {
+                  toast.message("Chamadas de voz estão disponíveis para a Portaria.");
+                  return;
+                }
+                if (callSocketStatus !== "ready") {
+                  toast.error("Chamada indisponível: socket de voz desconectado.");
+                  return;
+                }
+                if (!resolvePortariaConversationUuid()) {
+                  toast.error("Abra uma conversa com a Portaria antes de ligar.");
+                  return;
+                }
+                setCallConfirmOpen(true);
+              }}
+            >
+              <Phone className="h-4 w-4" />
+            </Button>
             <Badge variant={socketReady ? "secondary" : "outline"}>
               {selectedTarget.type === "PORTARIA"
                 ? "Portaria"
@@ -806,7 +928,36 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto bg-muted/50 px-4 py-4">
+        <Dialog open={callConfirmOpen} onOpenChange={setCallConfirmOpen}>
+          <DialogContent className="max-w-[calc(100%-2rem)] rounded-2xl sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Chamada de voz</DialogTitle>
+              <DialogDescription>
+                Deseja ligar para a Portaria usando esta conversa?
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:space-x-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCallConfirmOpen(false)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void handleStartPortariaCall()}
+              >
+                Ligar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <div
+          ref={messagesContainerRef}
+          className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-muted/50 px-4 py-4"
+        >
           {history.messages.map((chatMessage) => (
             <motion.div
               key={chatMessage.id}
@@ -872,7 +1023,7 @@ export default function ChatPage() {
           ) : null}
         </div>
 
-        <div className="safe-bottom space-y-3 border-t border-border bg-card px-4 py-3">
+        <div className="shrink-0 space-y-3 border-t border-border bg-card px-4 py-3">
           {selectedFile ? (
             <div className="flex items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-xs text-muted-foreground">
               <Paperclip className="h-4 w-4" />

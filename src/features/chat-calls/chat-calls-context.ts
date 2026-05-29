@@ -45,11 +45,23 @@ export type ActiveChatCall = {
   lastRequestId?: string;
 };
 
+export type ChatCallDiagnostics = {
+  connectionState: RTCPeerConnectionState | "none";
+  iceConnectionState: RTCIceConnectionState | "none";
+  signalingState: RTCSignalingState | "none";
+  localAudio: "none" | "capturing" | "muted";
+  remoteAudio: "none" | "waiting" | "receiving";
+  pendingIceCandidates: number;
+  lastEvent: string;
+  lastError: string | null;
+};
+
 export type ChatCallsContextValue = {
   socketStatus: "idle" | "connecting" | "ready" | "error";
   socketError: string;
   readyPayload: ChatCallReadyPayload | null;
   currentCall: ActiveChatCall | null;
+  diagnostics: ChatCallDiagnostics;
   canUseCalls: boolean;
   startPortariaCall: (conversationUuid: string) => Promise<void>;
   acceptCurrentCall: () => Promise<void>;

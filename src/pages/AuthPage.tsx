@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
+  Building2,
   ChevronLeft,
   KeyRound,
+  MapPin,
   Network,
   Settings2,
   ShieldCheck,
@@ -60,16 +62,16 @@ function resolveStageTitle(stage: AuthStage) {
     case "login":
       return "Entrar no app";
     case "context":
-      return "Selecionar site";
+      return "Selecionar tenant e site";
   }
 }
 
 function resolveStageSubtitle(stage: AuthStage) {
   switch (stage) {
     case "login":
-      return "Informe o CPF para consultar seus vínculos";
+      return "Informe CPF e senha para consultar seus vínculos";
     case "context":
-      return "Escolha o site e confirme a senha desta sessão";
+      return "Escolha qual tenant e site deseja acessar agora";
   }
 }
 
@@ -105,6 +107,36 @@ const AuthPage = () => {
   );
   const contextTenantCount = countUniqueTenantContexts(availableContexts);
   const contextSiteCount = countUniqueSiteContexts(availableContexts);
+  const tenantOptions = useMemo(() => {
+    const tenants = new Map<string, string>();
+
+    for (const context of availableContexts) {
+      if (!tenants.has(context.tenant_uuid)) {
+        tenants.set(context.tenant_uuid, context.tenant_name);
+      }
+    }
+
+    return Array.from(tenants.entries()).map(([uuid, name]) => ({
+      uuid,
+      name,
+    }));
+  }, [availableContexts]);
+  const selectedContext = useMemo(
+    () =>
+      availableContexts.find(
+        (context) => resolveResidentLoginContextKey(context) === selectedContextId,
+      ) ?? null,
+    [availableContexts, selectedContextId],
+  );
+  const selectedTenantUuid =
+    selectedContext?.tenant_uuid ?? tenantOptions[0]?.uuid ?? "";
+  const selectedTenantContexts = useMemo(
+    () =>
+      availableContexts.filter(
+        (context) => context.tenant_uuid === selectedTenantUuid,
+      ),
+    [availableContexts, selectedTenantUuid],
+  );
 
   function applyApiBaseUrl() {
     const nextApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
@@ -142,7 +174,7 @@ const AuthPage = () => {
       setAvailableContexts(contexts);
       setSelectedContextId(resolveResidentLoginContextKey(contexts[0]));
       setStage("context");
-      setLoginMessage("Selecione o site que deseja acessar agora.");
+      setLoginMessage("Selecione o tenant e o site que deseja acessar agora.");
     } catch (error) {
       window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
       setLoginMessage(
@@ -163,7 +195,7 @@ const AuthPage = () => {
           context_key: selectedContextId,
           cpf,
           password,
-          profile_type: "RESIDENT",
+          profile_type: selectedContext?.profile_type ?? "RESIDENT",
         },
         resolvedApiBaseUrl,
       );
@@ -174,6 +206,16 @@ const AuthPage = () => {
         resolveErrorMessage(error, "Não foi possível ativar o site selecionado."),
       );
     }
+  }
+
+  function handleTenantSelect(tenantUuid: string) {
+    const nextContext = availableContexts.find(
+      (context) => context.tenant_uuid === tenantUuid,
+    );
+
+    setSelectedContextId(
+      nextContext ? resolveResidentLoginContextKey(nextContext) : "",
+    );
   }
 
   function handleOpenPreview() {
@@ -196,16 +238,28 @@ const AuthPage = () => {
               inputMode="numeric"
             />
           </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-white/50">Senha</Label>
+            <Input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Digite sua senha"
+              className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
+            />
+          </div>
         </div>
 
         <Button
           className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
           disabled={
-            cpf.replace(/\D/g, "").length !== 11 || isConnecting
+            cpf.replace(/\D/g, "").length !== 11 ||
+            !password.trim() ||
+            isConnecting
           }
           onClick={() => void handleLookup()}
         >
-          {isConnecting ? "Consultando..." : "Consultar CPF"}
+          {isConnecting ? "Consultando..." : "Continuar"}
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
@@ -229,8 +283,41 @@ const AuthPage = () => {
           </div>
         </div>
 
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-white/35">
+            <Building2 className="h-3.5 w-3.5" />
+            Tenant
+          </div>
+          <div className="grid gap-2">
+            {tenantOptions.map((tenant) => {
+              const selected = tenant.uuid === selectedTenantUuid;
+
+              return (
+                <button
+                  key={tenant.uuid}
+                  type="button"
+                  onClick={() => handleTenantSelect(tenant.uuid)}
+                  className={`w-full rounded-[16px] border px-4 py-3 text-left transition-all ${
+                    selected
+                      ? "border-blue-400/50 bg-blue-400/10 text-blue-100"
+                      : "border-white/[0.08] bg-white/[0.04] text-white/70 hover:border-white/15"
+                  }`}
+                >
+                  <span className="block truncate text-sm font-semibold">
+                    {tenant.name || "Tenant disponível"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="flex-1 space-y-2">
-          {availableContexts.map((context) => {
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-white/35">
+            <MapPin className="h-3.5 w-3.5" />
+            Site
+          </div>
+          {selectedTenantContexts.map((context) => {
             const contextId = resolveResidentLoginContextKey(context);
             const selected = contextId === selectedContextId;
 
@@ -265,23 +352,12 @@ const AuthPage = () => {
           })}
         </div>
 
-        <div className="space-y-1.5">
-          <Label className="text-xs font-medium text-white/50">Senha</Label>
-          <Input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Digite sua senha"
-            className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
-          />
-        </div>
-
         <Button
           className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
           disabled={!selectedContextId || !password.trim() || isConnecting}
           onClick={() => void handleContextContinue()}
         >
-          {isConnecting ? "Entrando..." : "Entrar neste site"}
+          {isConnecting ? "Entrando..." : "Entrar no app"}
           <ArrowRight className="h-4 w-4" />
         </Button>
         <button
@@ -297,7 +373,7 @@ const AuthPage = () => {
 
   return (
     <div
-      className="relative flex min-h-screen flex-col overflow-hidden"
+      className="relative flex min-h-screen flex-col overflow-x-hidden"
       style={{ background: "linear-gradient(160deg, #080c18 0%, #0f172a 55%, #130e22 100%)" }}
     >
       <div className="pointer-events-none absolute inset-0 overflow-hidden">

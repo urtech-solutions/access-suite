@@ -7,7 +7,15 @@ import {
   type ReactNode,
 } from "react";
 import { io, type Socket } from "socket.io-client";
-import { Mic, Phone, PhoneIncoming, PhoneOff, WifiOff } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Mic,
+  Phone,
+  PhoneIncoming,
+  PhoneOff,
+  WifiOff,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,12 +24,14 @@ import incomingCallToneUrl from "@/assets/audio/incoming-call-tone.wav";
 import {
   ChatCallsContext,
   type ActiveChatCall,
+  type ChatCallDiagnostics,
   type ChatCallInvitePayload,
   type ChatCallReadyPayload,
   type ChatCallSignalPayload,
   type ChatCallsContextValue,
 } from "@/features/chat-calls/chat-calls-context";
 import { useSession } from "@/features/session/SessionProvider";
+import { normalizeApiBaseUrl } from "@/services/mobile-app.service";
 
 type ChatCallSdpPayload = ChatCallSignalPayload & {
   sdp: RTCSessionDescriptionInit;
@@ -29,6 +39,31 @@ type ChatCallSdpPayload = ChatCallSignalPayload & {
 
 type ChatCallIcePayload = ChatCallSignalPayload & {
   candidate: RTCIceCandidateInit;
+};
+
+type ChatCallMediaState = "connecting" | "connected" | "reconnecting" | "failed";
+
+type ChatCallIceServersResponse = {
+  ice_servers?: RTCIceServer[];
+  ttl_seconds?: number;
+};
+
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+];
+const PEER_CONNECTION_CONFIG: RTCConfiguration = {
+  iceCandidatePoolSize: 4,
+};
+const VALID_ICE_SERVER_URL_PATTERN = /^(stun|stuns|turn|turns):/i;
+const INITIAL_CALL_DIAGNOSTICS: ChatCallDiagnostics = {
+  connectionState: "none",
+  iceConnectionState: "none",
+  signalingState: "none",
+  localAudio: "none",
+  remoteAudio: "none",
+  pendingIceCandidates: 0,
+  lastEvent: "idle",
+  lastError: null,
 };
 
 function resolveSocketBaseUrl(apiBaseUrl?: string | null) {
@@ -60,9 +95,57 @@ function isSameCall(active: ActiveChatCall | null, callUuid?: string | null) {
   return getCallUuid(active) === callUuid;
 }
 
-function getPeerConnectionConfig(): RTCConfiguration {
+function normalizeIceServerUrls(value: unknown) {
+  if (typeof value === "string") {
+    const url = value.trim();
+    return VALID_ICE_SERVER_URL_PATTERN.test(url) ? url : null;
+  }
+
+  if (!Array.isArray(value)) return null;
+  const urls = value
+    .filter((url): url is string => typeof url === "string")
+    .map((url) => url.trim())
+    .filter((url) => VALID_ICE_SERVER_URL_PATTERN.test(url));
+
+  return urls.length > 0 ? urls : null;
+}
+
+function normalizeIceServer(value: unknown): RTCIceServer | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as {
+    credential?: unknown;
+    urls?: unknown;
+    username?: unknown;
+  };
+  const urls = normalizeIceServerUrls(data.urls);
+  if (!urls) return null;
+
   return {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    ...(typeof data.credential === "string" && data.credential.trim()
+      ? { credential: data.credential.trim() }
+      : {}),
+    urls,
+    ...(typeof data.username === "string" && data.username.trim()
+      ? { username: data.username.trim() }
+      : {}),
+  };
+}
+
+function normalizeIceServers(value: unknown) {
+  if (!Array.isArray(value)) return DEFAULT_ICE_SERVERS;
+  const servers = value
+    .map(normalizeIceServer)
+    .filter((server): server is RTCIceServer => server !== null);
+  return servers.length > 0 ? servers : DEFAULT_ICE_SERVERS;
+}
+
+function toIceCandidateInit(candidate: RTCIceCandidate): RTCIceCandidateInit {
+  if (typeof candidate.toJSON === "function") return candidate.toJSON();
+  return {
+    candidate: candidate.candidate,
+    sdpMLineIndex: candidate.sdpMLineIndex,
+    sdpMid: candidate.sdpMid,
+    usernameFragment: candidate.usernameFragment,
   };
 }
 
@@ -70,10 +153,17 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
   const { snapshot, isAuthenticated } = useSession();
   const socketRef = useRef<Socket | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
+  const peerCallUuidRef = useRef<string | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentCallRef = useRef<ActiveChatCall | null>(null);
+  const pendingIceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(
+    new Map(),
+  );
+  const iceServersRef = useRef<RTCIceServer[] | null>(null);
+  const iceServersExpiresAtRef = useRef(0);
+  const lastMediaStateRef = useRef<string | null>(null);
   const socketBaseUrl = useMemo(
     () => resolveSocketBaseUrl(snapshot.apiBaseUrl),
     [snapshot.apiBaseUrl],
@@ -84,6 +174,9 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
   const [socketError, setSocketError] = useState("");
   const [readyPayload, setReadyPayload] = useState<ChatCallReadyPayload | null>(null);
   const [currentCall, setCurrentCall] = useState<ActiveChatCall | null>(null);
+  const [diagnostics, setDiagnostics] = useState<ChatCallDiagnostics>(
+    INITIAL_CALL_DIAGNOSTICS,
+  );
 
   const canUseCalls =
     snapshot.mode === "backend" && isAuthenticated && Boolean(snapshot.token);
@@ -96,12 +189,42 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     setCurrentCall(next);
   }, []);
 
+  const updateDiagnostics = useCallback(
+    (
+      patch:
+        | Partial<ChatCallDiagnostics>
+        | ((current: ChatCallDiagnostics) => Partial<ChatCallDiagnostics>),
+    ) => {
+      setDiagnostics((current) => ({
+        ...current,
+        ...(typeof patch === "function" ? patch(current) : patch),
+      }));
+    },
+    [],
+  );
+
+  const updatePeerDiagnostics = useCallback(
+    (peer: RTCPeerConnection, lastEvent: string) => {
+      updateDiagnostics((current) => ({
+        connectionState: peer.connectionState,
+        iceConnectionState: peer.iceConnectionState,
+        lastEvent,
+        pendingIceCandidates: current.pendingIceCandidates,
+        signalingState: peer.signalingState,
+      }));
+    },
+    [updateDiagnostics],
+  );
+
   const closePeer = useCallback(() => {
     peerRef.current?.getSenders().forEach((sender) => {
       sender.track?.stop();
     });
     peerRef.current?.close();
     peerRef.current = null;
+    peerCallUuidRef.current = null;
+    pendingIceCandidatesRef.current.clear();
+    lastMediaStateRef.current = null;
 
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
@@ -109,6 +232,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = null;
     }
+    setDiagnostics(INITIAL_CALL_DIAGNOSTICS);
   }, []);
 
   const emitCallEvent = useCallback(
@@ -124,6 +248,55 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  const emitMediaState = useCallback(
+    (mediaState: ChatCallMediaState, callUuid: string, reason?: string) => {
+      const sentKey = `${callUuid}:${mediaState}:${reason ?? ""}`;
+      if (lastMediaStateRef.current === sentKey && mediaState !== "failed") {
+        return;
+      }
+      lastMediaStateRef.current = sentKey;
+      emitCallEvent(mediaState === "failed" ? "chat:call:failed" : "chat:call:media-state", {
+        call_uuid: callUuid,
+        media_state: mediaState,
+        reason,
+        requestId: createRequestId("media"),
+      });
+    },
+    [emitCallEvent],
+  );
+
+  const loadIceServers = useCallback(async () => {
+    if (
+      iceServersRef.current &&
+      iceServersExpiresAtRef.current > Date.now() + 30_000
+    ) {
+      return iceServersRef.current;
+    }
+
+    try {
+      const endpoint = `${normalizeApiBaseUrl(
+        snapshot.apiBaseUrl,
+      )}/chat/app/calls/ice-servers`;
+      const response = await fetch(endpoint, {
+        method: "GET",
+        headers: {
+          ...(snapshot.token ? { Authorization: `Bearer ${snapshot.token}` } : {}),
+        },
+      });
+      if (!response.ok) throw new Error("ICE request failed");
+      const payload = (await response.json()) as ChatCallIceServersResponse;
+      const iceServers = normalizeIceServers(payload.ice_servers);
+      iceServersRef.current = iceServers;
+      iceServersExpiresAtRef.current =
+        Date.now() + Math.max(Number(payload.ttl_seconds) || 600, 60) * 1_000;
+      return iceServers;
+    } catch {
+      iceServersRef.current = DEFAULT_ICE_SERVERS;
+      iceServersExpiresAtRef.current = Date.now() + 60_000;
+      return DEFAULT_ICE_SERVERS;
+    }
+  }, [snapshot.apiBaseUrl, snapshot.token]);
 
   const emitRinging = useCallback(
     (invite: ChatCallInvitePayload) => {
@@ -149,26 +322,83 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio: {
+        autoGainControl: true,
+        channelCount: { ideal: 1 },
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
       video: false,
     });
     localStreamRef.current = stream;
+    updateDiagnostics({
+      lastEvent: "microphone-ready",
+      lastError: null,
+      localAudio: "capturing",
+    });
     return stream;
-  }, []);
+  }, [updateDiagnostics]);
+
+  const queueIceCandidate = useCallback(
+    (callUuid: string, candidate: RTCIceCandidateInit) => {
+      const candidates = pendingIceCandidatesRef.current.get(callUuid) ?? [];
+      candidates.push(candidate);
+      pendingIceCandidatesRef.current.set(callUuid, candidates.slice(-50));
+      updateDiagnostics({
+        lastEvent: "ice-candidate-queued",
+        pendingIceCandidates: candidates.length + 1,
+      });
+    },
+    [updateDiagnostics],
+  );
+
+  const flushQueuedIceCandidates = useCallback(
+    async (peer: RTCPeerConnection, callUuid: string) => {
+      if (!peer.remoteDescription) return;
+      const candidates = pendingIceCandidatesRef.current.get(callUuid) ?? [];
+      if (candidates.length === 0) return;
+
+      pendingIceCandidatesRef.current.delete(callUuid);
+      updateDiagnostics({
+        lastEvent: "ice-candidates-flushed",
+        pendingIceCandidates: 0,
+      });
+      for (const candidate of candidates) {
+        try {
+          await peer.addIceCandidate(candidate);
+        } catch {
+          // ICE candidates can become stale during negotiation.
+        }
+      }
+    },
+    [updateDiagnostics],
+  );
 
   const ensurePeer = useCallback(
     async (callUuid: string) => {
-      if (peerRef.current) return peerRef.current;
+      if (peerRef.current && peerCallUuidRef.current === callUuid) {
+        return peerRef.current;
+      }
 
-      const stream = await ensureLocalStream();
-      const peer = new RTCPeerConnection(getPeerConnectionConfig());
+      peerRef.current?.close();
+
+      const [stream, iceServers] = await Promise.all([
+        ensureLocalStream(),
+        loadIceServers(),
+      ]);
+      const peer = new RTCPeerConnection({
+        ...PEER_CONNECTION_CONFIG,
+        iceServers,
+      });
+      updatePeerDiagnostics(peer, "peer-created");
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
 
       peer.onicecandidate = (event) => {
         if (!event.candidate) return;
+        updatePeerDiagnostics(peer, "local-ice-candidate");
         emitCallEvent("chat:call:ice-candidate", {
           call_uuid: callUuid,
-          candidate: event.candidate.toJSON(),
+          candidate: toIceCandidateInit(event.candidate),
           requestId: createRequestId("ice"),
         });
       };
@@ -177,33 +407,68 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
         const [remoteStream] = event.streams;
         if (remoteAudioRef.current && remoteStream) {
           remoteAudioRef.current.srcObject = remoteStream;
+          remoteAudioRef.current.muted = false;
+          remoteAudioRef.current.volume = 1;
           void remoteAudioRef.current.play().catch(() => undefined);
         }
+        updatePeerDiagnostics(peer, "remote-track");
+        updateDiagnostics({ remoteAudio: "receiving" });
         const active = currentCallRef.current;
         if (active && getCallUuid(active) === callUuid) {
           updateCurrentCall({ ...active, phase: "active" });
         }
       };
 
+      peer.oniceconnectionstatechange = () => {
+        updatePeerDiagnostics(peer, `ice-${peer.iceConnectionState}`);
+      };
+      peer.onsignalingstatechange = () => {
+        updatePeerDiagnostics(peer, `signaling-${peer.signalingState}`);
+      };
       peer.onconnectionstatechange = () => {
+        updatePeerDiagnostics(peer, `connection-${peer.connectionState}`);
         if (peer.connectionState === "connected") {
           const active = currentCallRef.current;
           if (active && getCallUuid(active) === callUuid) {
             updateCurrentCall({ ...active, phase: "active" });
           }
+          emitMediaState("connected", callUuid);
+        }
+        if (peer.connectionState === "connecting") {
+          emitMediaState("connecting", callUuid);
+        }
+        if (peer.connectionState === "disconnected") {
+          emitMediaState("reconnecting", callUuid);
+        }
+        if (peer.connectionState === "failed") {
+          updateDiagnostics({ lastError: "WEBRTC_CONNECTION_FAILED" });
+          emitMediaState("reconnecting", callUuid, "WEBRTC_CONNECTION_FAILED");
         }
       };
 
       peerRef.current = peer;
+      peerCallUuidRef.current = callUuid;
       return peer;
     },
-    [emitCallEvent, ensureLocalStream, updateCurrentCall],
+    [
+      emitCallEvent,
+      emitMediaState,
+      ensureLocalStream,
+      loadIceServers,
+      updateCurrentCall,
+      updateDiagnostics,
+      updatePeerDiagnostics,
+    ],
   );
 
   const createAndSendOffer = useCallback(
     async (callUuid: string) => {
       const peer = await ensurePeer(callUuid);
-      const offer = await peer.createOffer();
+      emitMediaState("connecting", callUuid);
+      const offer = await peer.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: false,
+      });
       await peer.setLocalDescription(offer);
       emitCallEvent("chat:call:offer", {
         call_uuid: callUuid,
@@ -211,7 +476,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
         requestId: createRequestId("offer"),
       });
     },
-    [emitCallEvent, ensurePeer],
+    [emitCallEvent, emitMediaState, ensurePeer],
   );
 
   const resetCall = useCallback(() => {
@@ -254,6 +519,13 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       }
 
       const requestId = createRequestId("invite");
+      void ensureLocalStream().catch((error) => {
+        toast.error(
+          error instanceof Error ? error.message : "Falha ao acessar o microfone.",
+        );
+      });
+      void loadIceServers().catch(() => undefined);
+
       updateCurrentCall({
         invite: {
           conversation_uuid: normalizedConversationUuid,
@@ -270,7 +542,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
         requestId,
       });
     },
-    [socketStatus, updateCurrentCall],
+    [ensureLocalStream, loadIceServers, socketStatus, updateCurrentCall],
   );
 
   const rejectCurrentCall = useCallback(() => {
@@ -347,7 +619,9 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       try {
         updateCurrentCall({ ...active, phase: "connecting" });
         const peer = await ensurePeer(payload.call_uuid);
+        emitMediaState("connecting", payload.call_uuid);
         await peer.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        await flushQueuedIceCandidates(peer, payload.call_uuid);
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
         emitCallEvent("chat:call:answer", {
@@ -359,35 +633,98 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
         toast.error(
           error instanceof Error ? error.message : "Falha na negociação WebRTC.",
         );
-        endCurrentCall("WEBRTC_FAILED");
+        updateDiagnostics({
+          lastError: "WEBRTC_ANSWER_FAILED",
+          lastEvent: "answer-failed",
+        });
+        emitMediaState("reconnecting", payload.call_uuid, "WEBRTC_ANSWER_FAILED");
       }
     },
-    [emitCallEvent, endCurrentCall, ensurePeer, updateCurrentCall],
+    [
+      emitCallEvent,
+      emitMediaState,
+      ensurePeer,
+      flushQueuedIceCandidates,
+      resetCall,
+      updateCurrentCall,
+      updateDiagnostics,
+    ],
   );
 
-  const handleAnswer = useCallback(async (payload: ChatCallSdpPayload) => {
-    const active = currentCallRef.current;
-    if (!active || getCallUuid(active) !== payload.call_uuid || !peerRef.current) {
-      return;
-    }
+  const handleAnswer = useCallback(
+    async (payload: ChatCallSdpPayload) => {
+      const active = currentCallRef.current;
+      const peer = peerRef.current;
+      if (
+        !active ||
+        getCallUuid(active) !== payload.call_uuid ||
+        !peer ||
+        peer.signalingState === "stable"
+      ) {
+        return;
+      }
 
-    await peerRef.current.setRemoteDescription(
-      new RTCSessionDescription(payload.sdp),
-    );
-  }, []);
+      try {
+        await peer.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        await flushQueuedIceCandidates(peer, payload.call_uuid);
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Falha ao conectar áudio.",
+        );
+        updateDiagnostics({
+          lastError: "WEBRTC_REMOTE_ANSWER_FAILED",
+          lastEvent: "remote-answer-failed",
+        });
+        emitMediaState(
+          "reconnecting",
+          payload.call_uuid,
+          "WEBRTC_REMOTE_ANSWER_FAILED",
+        );
+      }
+    },
+    [emitMediaState, flushQueuedIceCandidates, resetCall, updateDiagnostics],
+  );
 
-  const handleIceCandidate = useCallback(async (payload: ChatCallIcePayload) => {
-    const active = currentCallRef.current;
-    if (!active || getCallUuid(active) !== payload.call_uuid || !peerRef.current) {
-      return;
-    }
+  const handleIceCandidate = useCallback(
+    async (payload: ChatCallIcePayload) => {
+      const active = currentCallRef.current;
+      if (!active || getCallUuid(active) !== payload.call_uuid) return;
 
-    try {
-      await peerRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
-    } catch {
-      // ICE candidates can arrive out of order during reconnects.
-    }
-  }, []);
+      const peer = peerRef.current;
+      if (
+        !peer ||
+        peerCallUuidRef.current !== payload.call_uuid ||
+        !peer.remoteDescription
+      ) {
+        queueIceCandidate(payload.call_uuid, payload.candidate);
+        return;
+      }
+
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(payload.candidate));
+      } catch {
+        // ICE candidates can arrive out of order during reconnects.
+      }
+    },
+    [queueIceCandidate],
+  );
+
+  useEffect(() => {
+    const active = currentCall;
+    const callUuid = getCallUuid(active);
+    if (!active || !callUuid || active.phase !== "active") return undefined;
+
+    const sendHeartbeat = () => {
+      emitCallEvent("chat:call:heartbeat", {
+        call_uuid: callUuid,
+        requestId: createRequestId("heartbeat"),
+      });
+    };
+
+    sendHeartbeat();
+    const heartbeatId = window.setInterval(sendHeartbeat, 15_000);
+    return () => window.clearInterval(heartbeatId);
+  }, [currentCall, emitCallEvent]);
 
   useEffect(() => {
     if (!canUseCalls) {
@@ -422,6 +759,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       setReadyPayload(payload);
       setSocketStatus("ready");
       setSocketError("");
+      void loadIceServers().catch(() => undefined);
     };
 
     const handleConnectError = (error: Error) => {
@@ -432,6 +770,12 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     const handleDisconnect = () => {
       setSocketStatus("connecting");
       setReadyPayload(null);
+    };
+
+    const handleCallError = (payload?: { message?: string }) => {
+      const message = payload?.message || "Falha no canal de chamadas de voz.";
+      setSocketError(message);
+      toast.error(message);
     };
 
     const handleInvite = (invite: ChatCallInvitePayload) => {
@@ -448,6 +792,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       }
 
       closePeer();
+      void loadIceServers().catch(() => undefined);
       updateCurrentCall({ invite, direction: "incoming", phase: "incoming" });
       emitRinging(invite);
       toast.message("Chamada de voz recebida.");
@@ -494,7 +839,11 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
         toast.error(
           error instanceof Error ? error.message : "Falha ao iniciar áudio da chamada.",
         );
-        endCurrentCall("WEBRTC_FAILED");
+        updateDiagnostics({
+          lastError: "WEBRTC_OFFER_FAILED",
+          lastEvent: "offer-failed",
+        });
+        emitMediaState("reconnecting", payload.call_uuid, "WEBRTC_OFFER_FAILED");
       });
     };
 
@@ -516,9 +865,36 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       resetCall();
     };
 
+    const handleFailed = (
+      payload?: ChatCallSignalPayload & { reason?: string | null },
+    ) => {
+      const active = currentCallRef.current;
+      if (!active) return;
+      if (payload?.call_uuid && payload.call_uuid !== getCallUuid(active)) return;
+      toast.error("Chamada encerrada por falha de áudio.");
+      resetCall();
+    };
+
+    const handleMediaState = (
+      payload?: ChatCallSignalPayload & { media_state?: ChatCallMediaState | null },
+    ) => {
+      const active = currentCallRef.current;
+      if (!isSameCall(active, payload?.call_uuid)) return;
+      if (payload?.media_state === "failed") {
+        toast.error("Chamada encerrada por falha de áudio.");
+        resetCall();
+        return;
+      }
+      if (payload?.media_state === "connected") {
+        updateCurrentCall({ ...active, phase: "active" });
+      }
+    };
+
     socket.on("chat:call:ready", handleReady);
     socket.on("connect_error", handleConnectError);
     socket.on("disconnect", handleDisconnect);
+    socket.on("chat:call:error", handleCallError);
+    socket.on("exception", handleCallError);
     socket.on("chat:call:invite", handleInvite);
     socket.on("chat:call:invite:ack", handleInviteAck);
     socket.on("chat:call:ringing", handleRinging);
@@ -526,6 +902,8 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     socket.on("chat:call:reject", handleRejected);
     socket.on("chat:call:end", handleRemoteEnd);
     socket.on("chat:call:cancel", handleRemoteEnd);
+    socket.on("chat:call:failed", handleFailed);
+    socket.on("chat:call:media-state", handleMediaState);
     socket.on("chat:call:offer", handleOffer);
     socket.on("chat:call:answer", handleAnswer);
     socket.on("chat:call:ice-candidate", handleIceCandidate);
@@ -534,6 +912,8 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       socket.off("chat:call:ready", handleReady);
       socket.off("connect_error", handleConnectError);
       socket.off("disconnect", handleDisconnect);
+      socket.off("chat:call:error", handleCallError);
+      socket.off("exception", handleCallError);
       socket.off("chat:call:invite", handleInvite);
       socket.off("chat:call:invite:ack", handleInviteAck);
       socket.off("chat:call:ringing", handleRinging);
@@ -541,6 +921,8 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       socket.off("chat:call:reject", handleRejected);
       socket.off("chat:call:end", handleRemoteEnd);
       socket.off("chat:call:cancel", handleRemoteEnd);
+      socket.off("chat:call:failed", handleFailed);
+      socket.off("chat:call:media-state", handleMediaState);
       socket.off("chat:call:offer", handleOffer);
       socket.off("chat:call:answer", handleAnswer);
       socket.off("chat:call:ice-candidate", handleIceCandidate);
@@ -554,15 +936,17 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     canUseCalls,
     closePeer,
     createAndSendOffer,
+    emitMediaState,
     emitRinging,
-    endCurrentCall,
     handleAnswer,
     handleIceCandidate,
     handleOffer,
+    loadIceServers,
     resetCall,
     snapshot.token,
     socketBaseUrl,
     updateCurrentCall,
+    updateDiagnostics,
   ]);
 
   const contextValue = useMemo<ChatCallsContextValue>(
@@ -571,6 +955,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       socketError,
       readyPayload,
       currentCall,
+      diagnostics,
       canUseCalls,
       startPortariaCall,
       acceptCurrentCall,
@@ -581,6 +966,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       acceptCurrentCall,
       canUseCalls,
       currentCall,
+      diagnostics,
       endCurrentCall,
       readyPayload,
       rejectCurrentCall,
@@ -604,6 +990,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       <ChatCallOverlay
         socketStatus={socketStatus}
         currentCall={currentCall}
+        diagnostics={diagnostics}
         acceptCurrentCall={acceptCurrentCall}
         rejectCurrentCall={rejectCurrentCall}
         endCurrentCall={endCurrentCall}
@@ -615,16 +1002,20 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
 function ChatCallOverlay({
   socketStatus,
   currentCall,
+  diagnostics,
   acceptCurrentCall,
   rejectCurrentCall,
   endCurrentCall,
 }: {
   socketStatus: ChatCallsContextValue["socketStatus"];
   currentCall: ActiveChatCall | null;
+  diagnostics: ChatCallDiagnostics;
   acceptCurrentCall: () => Promise<void>;
   rejectCurrentCall: () => void;
   endCurrentCall: () => void;
 }) {
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+
   if (!currentCall) return null;
 
   const isOutgoing = currentCall.direction === "outgoing";
@@ -670,6 +1061,40 @@ function ChatCallOverlay({
               {callerName}
             </p>
           </div>
+        </div>
+
+        <div className="mt-3 rounded-2xl border border-dashed border-border bg-background/70 px-3 py-2 text-[11px] text-muted-foreground">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 text-left"
+            onClick={() => setShowDiagnostics((current) => !current)}
+          >
+            <span className="font-semibold text-foreground">
+              Resultado da chamada
+            </span>
+            {showDiagnostics ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </button>
+          {showDiagnostics ? (
+            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+              <span>Socket: {socketStatus}</span>
+              <span>ICE: {diagnostics.iceConnectionState}</span>
+              <span>Conexão: {diagnostics.connectionState}</span>
+              <span>Sinal: {diagnostics.signalingState}</span>
+              <span>Mic: {diagnostics.localAudio}</span>
+              <span>Remoto: {diagnostics.remoteAudio}</span>
+              <span>ICE fila: {diagnostics.pendingIceCandidates}</span>
+              <span>Evento: {diagnostics.lastEvent}</span>
+              {diagnostics.lastError ? (
+                <span className="col-span-2 text-destructive">
+                  Erro: {diagnostics.lastError}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="mt-4 flex gap-2">

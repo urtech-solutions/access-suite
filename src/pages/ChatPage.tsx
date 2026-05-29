@@ -875,8 +875,8 @@ export default function ChatPage() {
 
     return (
       <div className="flex h-[calc(100dvh_-_4.25rem_-_env(safe-area-inset-top,0px)_-_env(safe-area-inset-bottom,0px))] max-w-md flex-col overflow-hidden">
-        <div className="sticky top-0 z-20 shrink-0 bg-primary px-4 pb-4 pt-8 text-primary-foreground">
-          <div className="flex items-start gap-3">
+        <div className="sticky top-0 z-20 shrink-0 bg-primary px-4 pb-3 pt-5 text-primary-foreground">
+          <div className="flex items-center gap-3">
             <Button
               variant="ghost"
               size="icon"
@@ -887,7 +887,7 @@ export default function ChatPage() {
             </Button>
             <div className="min-w-0 flex-1">
               <h1 className="truncate text-lg font-semibold">{targetName}</h1>
-              <p className="mt-1 truncate text-sm text-primary-foreground/70">
+              <p className="mt-0.5 truncate text-sm text-primary-foreground/70">
                 {selectedTarget.type === "PORTARIA"
                   ? "Atendimento da Portaria"
                   : targetSiteName ?? "Conversa direta"}
@@ -918,13 +918,6 @@ export default function ChatPage() {
             >
               <Phone className="h-4 w-4" />
             </Button>
-            <Badge variant={socketReady ? "secondary" : "outline"}>
-              {selectedTarget.type === "PORTARIA"
-                ? "Portaria"
-                : socketReady
-                  ? "Online"
-                  : "Conectando"}
-            </Badge>
           </div>
         </div>
 
@@ -933,7 +926,7 @@ export default function ChatPage() {
             <DialogHeader>
               <DialogTitle>Chamada de voz</DialogTitle>
               <DialogDescription>
-                Deseja ligar para a Portaria usando esta conversa?
+                Deseja realizar a ligação para a pessoa {targetName}.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter className="gap-2 sm:space-x-0">

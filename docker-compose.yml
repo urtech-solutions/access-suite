@@ -23,7 +23,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
       args:
-        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_API_URL: ${VITE_API_URL:-/api}
         VITE_APP_MODE: ${VITE_APP_MODE:-backend}
         VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/access-os/}
     image: accessos/access-suite:runtime

@@ -67,7 +67,7 @@ function resolveStageTitle(stage: AuthStage) {
 function resolveStageSubtitle(stage: AuthStage) {
   switch (stage) {
     case "login":
-      return "Informe o CPF para consultar seus vínculos";
+      return "Informe CPF e senha para entrar";
     case "context":
       return "Escolha o site e confirme a senha desta sessão";
   }
@@ -80,7 +80,6 @@ const AuthPage = () => {
     snapshot,
     setApiBaseUrl,
     switchMode,
-    lookupAccess,
     connectBackend,
     isConnecting,
   } = useSession();
@@ -122,35 +121,29 @@ const AuthPage = () => {
     setSelectedContextId("");
   }
 
-  async function handleLookup() {
+  async function handleLogin() {
     const nextApiBaseUrl = applyApiBaseUrl();
     setLoginMessage("");
 
     try {
-      window.sessionStorage.setItem(AUTH_CONTEXT_SELECTION_KEY, "1");
-      const lookup = await lookupAccess(cpf, nextApiBaseUrl);
-      const contexts = lookup.contexts ?? [];
-
-      if (!lookup.eligible || contexts.length === 0) {
-        window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
-        setLoginMessage(
-          "Nenhum cadastro ativo foi encontrado para este CPF.",
-        );
-        return;
-      }
-
-      setAvailableContexts(contexts);
-      setSelectedContextId(resolveResidentLoginContextKey(contexts[0]));
-      setStage("context");
-      setLoginMessage("Selecione o site que deseja acessar agora.");
+      await connectBackend(
+        {
+          context_key: "",
+          cpf,
+          password,
+          profile_type: "RESIDENT",
+        },
+        nextApiBaseUrl,
+      );
+      window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
+      navigate(returnTo, { replace: true });
     } catch (error) {
       window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
       setLoginMessage(
-        resolveErrorMessage(error, "Não foi possível consultar este CPF."),
+        resolveErrorMessage(error, "Nao foi possivel autenticar no app."),
       );
     }
   }
-
   async function handleContextContinue() {
     if (!selectedContextId) {
       setLoginMessage("Selecione um site para continuar.");
@@ -196,16 +189,28 @@ const AuthPage = () => {
               inputMode="numeric"
             />
           </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-white/50">Senha</Label>
+            <Input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Digite sua senha"
+              className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
+            />
+          </div>
         </div>
 
         <Button
           className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
           disabled={
-            cpf.replace(/\D/g, "").length !== 11 || isConnecting
+            cpf.replace(/\D/g, "").length !== 11 ||
+            !password.trim() ||
+            isConnecting
           }
-          onClick={() => void handleLookup()}
+          onClick={() => void handleLogin()}
         >
-          {isConnecting ? "Consultando..." : "Consultar CPF"}
+          {isConnecting ? "Entrando..." : "Entrar"}
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

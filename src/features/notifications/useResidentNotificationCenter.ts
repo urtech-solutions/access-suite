@@ -11,6 +11,8 @@ import {
 } from "@/features/notifications/resident-notifications";
 import {
   BULLETIN_MODULE_KEY,
+  CHAT_MODULE_KEY,
+  INCIDENTS_MODULE_KEY,
   getChatSettings,
   getDeliverySettings,
   listBulletin,
@@ -43,6 +45,8 @@ export function useResidentNotificationCenter() {
     readNotificationReadMap(notificationScope),
   );
   const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
+  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
+  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
 
   useEffect(() => {
     setReadMap(readNotificationReadMap(notificationScope));
@@ -82,6 +86,7 @@ export function useResidentNotificationCenter() {
   const incidentsQuery = useQuery({
     queryKey: ["incidents", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listIncidents(snapshot, connectionState, resident),
+    enabled: hasIncidentsModule,
   });
 
   const bulletinQuery = useQuery({
@@ -93,12 +98,13 @@ export function useResidentNotificationCenter() {
   const chatSettingsQuery = useQuery({
     queryKey: ["chat-settings", resident.id, snapshot.mode, connectionState],
     queryFn: () => getChatSettings(snapshot, connectionState),
+    enabled: hasChatModule,
   });
 
   const chatThreadsQuery = useQuery({
     queryKey: ["chat-threads", resident.id, snapshot.mode, connectionState],
     queryFn: () => listChatThreads(snapshot, connectionState, resident),
-    enabled: chatSettingsQuery.data?.enabled !== false,
+    enabled: hasChatModule && chatSettingsQuery.data?.enabled !== false,
   });
 
   const notifications = useMemo(
@@ -174,6 +180,7 @@ export function useResidentNotificationCenter() {
       chatThreadsQuery.data,
       deliveriesQuery.data,
       incidentsQuery.data,
+      hasIncidentsModule,
       resident.role,
       unreadByModule.BULLETIN,
       unreadCount,

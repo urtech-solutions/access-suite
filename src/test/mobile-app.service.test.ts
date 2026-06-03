@@ -17,6 +17,7 @@ import {
   getBulletinImageBlob,
   getBulletinModuleStatus,
   getIncidentSettings,
+  INCIDENTS_MODULE_KEY,
   isProtectedDeliveryPhotoUrl,
   isProtectedBulletinImageUrl,
   getVisitorSettings,
@@ -182,6 +183,34 @@ describe("mobile-app service", () => {
           profile_type: "RESIDENT",
         }),
       }),
+    );
+  });
+
+  it("hides gateway HTML when the person app login endpoint is unavailable", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "text/html" : null,
+      },
+      text: async () =>
+        "<html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><center>nginx</center></body></html>",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      connectBackendSession(
+        {
+          context_key: "",
+          cpf: "070.097.183-18",
+          password: "070",
+          profile_type: "RESIDENT",
+        },
+        "http://localhost:3000",
+      ),
+    ).rejects.toThrow(
+      "Servidor temporariamente indisponível. Aguarde alguns instantes e tente novamente.",
     );
   });
 
@@ -808,7 +837,7 @@ describe("mobile-app service", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("does not gate incident requests by the INCIDENTS tenant module", async () => {
+  it("gates incident requests by the INCIDENTS tenant module", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
@@ -836,15 +865,7 @@ describe("mobile-app service", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(listIncidents(snapshot, "online", resident)).resolves.toEqual([]);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3000/resident-app/incidents?site_id=11",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Authorization: "Bearer access-token",
-        }),
-      }),
-    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("loads incident topics from the documented topics API", async () => {
@@ -861,7 +882,7 @@ describe("mobile-app service", () => {
       },
       token: "access-token",
       refreshToken: null,
-      user: { uuid: "user-1", modules: [] },
+      user: { uuid: "user-1", modules: [INCIDENTS_MODULE_KEY] },
     };
     const topics = [
       {

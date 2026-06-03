@@ -509,6 +509,7 @@ export interface ChatMessage {
   sender_role?: string | null;
   is_me: boolean;
   external_id?: string | null;
+  read_by_others?: boolean;
   metadata?: Record<string, unknown>;
   attachments?: ChatAttachment[];
 }

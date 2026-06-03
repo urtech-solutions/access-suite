@@ -22,6 +22,10 @@ import {
   type ChatCallsContextValue,
 } from "@/features/chat-calls/chat-calls-context";
 import { useSession } from "@/features/session/SessionProvider";
+import {
+  CHAT_MODULE_KEY,
+  sessionHasModule,
+} from "@/services/mobile-app.service";
 
 type ChatCallSdpPayload = ChatCallSignalPayload & {
   sdp: RTCSessionDescriptionInit;
@@ -68,6 +72,7 @@ function getPeerConnectionConfig(): RTCConfiguration {
 
 export function ChatCallsProvider({ children }: { children: ReactNode }) {
   const { snapshot, isAuthenticated } = useSession();
+  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
   const socketRef = useRef<Socket | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -86,7 +91,10 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
   const [currentCall, setCurrentCall] = useState<ActiveChatCall | null>(null);
 
   const canUseCalls =
-    snapshot.mode === "backend" && isAuthenticated && Boolean(snapshot.token);
+    hasChatModule &&
+    snapshot.mode === "backend" &&
+    isAuthenticated &&
+    Boolean(snapshot.token);
   const shouldPlayIncomingRingtone =
     currentCall?.direction === "incoming" &&
     (currentCall.phase === "incoming" || currentCall.phase === "ringing");

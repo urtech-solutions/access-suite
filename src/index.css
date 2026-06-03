@@ -87,6 +87,16 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    overflow: hidden;
+  }
+
   * {
     @apply border-border;
   }
@@ -101,6 +111,7 @@
       radial-gradient(circle at top left, rgba(15, 23, 42, 0.08), transparent 22%),
       linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(241, 245, 249, 0.92));
     background-attachment: fixed;
+    overflow: hidden;
   }
 
   h1,
@@ -133,5 +144,6 @@
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     scroll-padding-bottom: 7rem;
+    touch-action: pan-y;
   }
 }

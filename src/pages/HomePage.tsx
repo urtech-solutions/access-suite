@@ -42,6 +42,7 @@ import {
 } from "@/lib/browser-notifications";
 import {
   BULLETIN_MODULE_KEY,
+  INCIDENTS_MODULE_KEY,
   getDeliverySettings,
   listBulletin,
   listCommonAreas,
@@ -83,6 +84,7 @@ const HomePage = () => {
 
   const canSwitchContext = residents.length > 1;
   const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
+  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
 
   async function handleSwitchContext(nextId: number) {
     if (nextId === resident.id) {
@@ -149,6 +151,7 @@ const HomePage = () => {
   const incidentsQuery = useQuery({
     queryKey: ["incidents", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listIncidents(snapshot, connectionState, resident),
+    enabled: hasIncidentsModule,
   });
 
   // ─── Derived data ───
@@ -181,14 +184,18 @@ const HomePage = () => {
           },
         ]
       : []),
-    {
-      icon: AlertTriangle,
-      label: "Incidentes",
-      path: "/porteiro/incidentes",
-      tone: "bg-red-500/10 text-red-600",
-      description: "Fila operacional",
-      badgeCount: attentionCounts.incidents,
-    },
+    ...(hasIncidentsModule
+      ? [
+          {
+            icon: AlertTriangle,
+            label: "Incidentes",
+            path: "/porteiro/incidentes",
+            tone: "bg-red-500/10 text-red-600",
+            description: "Fila operacional",
+            badgeCount: attentionCounts.incidents,
+          },
+        ]
+      : []),
     ...(hasBulletinModule
       ? [
           {
@@ -250,13 +257,15 @@ const HomePage = () => {
       badge: "Visitante",
       variant: "info" as const,
     })),
-    ...(incidentsQuery.data ?? []).slice(0, 2).map((incident) => ({
-      id: `incident-${incident.id}`,
-      title: incident.title,
-      when: formatWhen(incident.created_at),
-      badge: "Incidente",
-      variant: "warning" as const,
-    })),
+    ...(hasIncidentsModule
+      ? (incidentsQuery.data ?? []).slice(0, 2).map((incident) => ({
+          id: `incident-${incident.id}`,
+          title: incident.title,
+          when: formatWhen(incident.created_at),
+          badge: "Incidente",
+          variant: "warning" as const,
+        }))
+      : []),
   ].slice(0, 4);
 
   const unitLabel = formatResidentCurrentAccess(resident);

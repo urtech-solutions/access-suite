@@ -19,7 +19,9 @@ import type {
   DeliveryEntry,
   DeliveryModuleSettings,
   DeliveryStatus,
+  IncidentAttachment,
   IncidentEntry,
+  IncidentMessage,
   IncidentModuleSettings,
   IncidentParticipantOption,
   IncidentTopic,
@@ -46,6 +48,7 @@ const PENDING_ACTIONS_KEY = "sv-mobile:pending-actions";
 const CACHE_PREFIX = "sv-mobile:cache:";
 export const INCIDENTS_MODULE_KEY = "INCIDENTS";
 export const BULLETIN_MODULE_KEY = "BULLETIN";
+export const CHAT_MODULE_KEY = "CHAT";
 export const VISITORS_MODULE_KEY = "VISITORS";
 export const COMMON_AREAS_MODULE_KEY = "COMMON_AREAS";
 export const RESERVATIONS_MODULE_KEY = "RESERVATIONS";
@@ -225,20 +228,49 @@ function buildReservationCreatePayload(input: CreateReservationInput) {
 
 function extractErrorMessage(payload: unknown, fallback: string) {
   if (typeof payload === "string" && payload.trim().length > 0) {
-    return payload;
+    return sanitizeApiErrorMessage(payload, fallback);
   }
 
   if (payload && typeof payload === "object" && "message" in payload) {
     const message = (payload as { message?: unknown }).message;
     if (typeof message === "string" && message.trim().length > 0) {
-      return message;
+      return sanitizeApiErrorMessage(message, fallback);
     }
     if (Array.isArray(message) && message.length > 0) {
-      return message.map((entry) => String(entry)).join(", ");
+      return sanitizeApiErrorMessage(
+        message.map((entry) => String(entry)).join(", "),
+        fallback,
+      );
     }
   }
 
   return fallback;
+}
+
+function sanitizeApiErrorMessage(message: string, fallback: string) {
+  const trimmed = message.trim();
+
+  if (!trimmed) {
+    return fallback;
+  }
+
+  if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
+    return fallback;
+  }
+
+  return trimmed.replace(/\s+/g, " ");
+}
+
+function buildApiErrorFallback(status: number) {
+  if (status === 502 || status === 503 || status === 504) {
+    return "Servidor temporariamente indisponível. Aguarde alguns instantes e tente novamente.";
+  }
+
+  if (status >= 500) {
+    return "O servidor não conseguiu concluir a solicitação agora. Tente novamente em instantes.";
+  }
+
+  return `Não foi possível concluir a solicitação. Código ${status}.`;
 }
 
 class ApiRequestError extends Error {
@@ -295,7 +327,7 @@ async function requestJson<T>(
 
   if (!response.ok) {
     throw new ApiRequestError(
-      extractErrorMessage(payload, `Request failed: ${response.status}`),
+      extractErrorMessage(payload, buildApiErrorFallback(response.status)),
       response.status,
       payload,
     );
@@ -342,7 +374,7 @@ async function requestForm<T>(
 
   if (!response.ok) {
     throw new ApiRequestError(
-      extractErrorMessage(payload, `Request failed: ${response.status}`),
+      extractErrorMessage(payload, buildApiErrorFallback(response.status)),
       response.status,
       payload,
     );
@@ -379,7 +411,7 @@ async function requestBlob(
       : await response.text().catch(() => "");
 
     throw new ApiRequestError(
-      extractErrorMessage(payload, `Request failed: ${response.status}`),
+      extractErrorMessage(payload, buildApiErrorFallback(response.status)),
       response.status,
       payload,
     );
@@ -646,6 +678,16 @@ export function sessionHasModule(
         (module) => String(module).trim().toUpperCase() === normalizedKey,
       ),
   );
+}
+
+function hasIncidentsModule(snapshot: Pick<SessionSnapshot, "mode" | "user">) {
+  return sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+}
+
+function assertIncidentsModule(snapshot: Pick<SessionSnapshot, "mode" | "user">) {
+  if (!hasIncidentsModule(snapshot)) {
+    throw new Error("O módulo de incidentes não está habilitado para este usuário.");
+  }
 }
 
 function resolveResidentRole(name: string) {
@@ -1521,6 +1563,148 @@ function resolveIncidentAttachmentKind(
   return undefined;
 }
 
+function readOptionalString(
+  value: Record<string, unknown>,
+  keys: string[],
+) {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function readOptionalNumber(
+  value: Record<string, unknown>,
+  keys: string[],
+) {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      const parsed = Number(candidate);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function inferIncidentAttachmentKind(
+  value: Record<string, unknown>,
+  mimeType: string | null,
+  url: string | null,
+): NonNullable<IncidentAttachment["kind"]> | undefined {
+  const explicitKind = readOptionalString(value, ["kind", "file_kind", "type"]);
+  const normalizedKind = explicitKind?.trim().toUpperCase();
+  if (
+    normalizedKind === "IMAGE" ||
+    normalizedKind === "VIDEO" ||
+    normalizedKind === "AUDIO"
+  ) {
+    return normalizedKind;
+  }
+
+  const mimeKind = resolveIncidentAttachmentKind(mimeType);
+  if (mimeKind) return mimeKind;
+
+  const normalizedUrl = String(url ?? "").split(/[?#]/)[0].toLowerCase();
+  if (/\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(normalizedUrl)) {
+    return "IMAGE";
+  }
+  if (/\.(mp4|mov|webm|m4v)$/i.test(normalizedUrl)) {
+    return "VIDEO";
+  }
+  if (/\.(mp3|wav|ogg|m4a|aac)$/i.test(normalizedUrl)) {
+    return "AUDIO";
+  }
+
+  return undefined;
+}
+
+function normalizeIncidentAttachment(
+  attachment?: unknown,
+): IncidentAttachment | null {
+  if (!attachment || typeof attachment !== "object") return null;
+
+  const value = attachment as Record<string, unknown>;
+  const mimeType = readOptionalString(value, [
+    "mime_type",
+    "mimeType",
+    "mimetype",
+    "content_type",
+    "contentType",
+    "file_mime_type",
+  ]);
+  const url = readOptionalString(value, [
+    "url",
+    "file_url",
+    "fileUrl",
+    "attachment_url",
+    "attachmentUrl",
+    "public_url",
+    "publicUrl",
+    "signed_url",
+    "signedUrl",
+    "download_url",
+    "downloadUrl",
+    "path",
+    "object_url",
+    "objectUrl",
+    "location",
+  ]);
+  const kind = inferIncidentAttachmentKind(value, mimeType, url);
+
+  if (!kind && !url) return null;
+
+  return {
+    kind,
+    url,
+    name: readOptionalString(value, [
+      "name",
+      "original_name",
+      "originalName",
+      "file_name",
+      "fileName",
+      "filename",
+    ]),
+    mime_type: mimeType,
+    size_bytes: readOptionalNumber(value, [
+      "size_bytes",
+      "sizeBytes",
+      "file_size_bytes",
+      "fileSizeBytes",
+      "size",
+    ]),
+  };
+}
+
+function normalizeIncidentMessage(message: IncidentMessage): IncidentMessage {
+  const raw = message as IncidentMessage & {
+    attachments?: unknown;
+  };
+  const attachment =
+    normalizeIncidentAttachment(raw.attachment) ??
+    (Array.isArray(raw.attachments)
+      ? normalizeIncidentAttachment(raw.attachments[0])
+      : null);
+
+  return {
+    ...message,
+    attachment,
+  };
+}
+
+function normalizeIncidentEntry(incident: IncidentEntry): IncidentEntry {
+  return {
+    ...incident,
+    messages: incident.messages?.map(normalizeIncidentMessage),
+  };
+}
+
 function sortIncidents(items: IncidentEntry[]) {
   return [...items].sort((left, right) => {
     const leftTime = new Date(
@@ -1644,6 +1828,14 @@ export async function getIncidentSettings(
     resident.site_name,
   );
 
+  if (!hasIncidentsModule(snapshot)) {
+    return {
+      ...previewSettings,
+      enabled: false,
+      topics: [],
+    };
+  }
+
   if (!isOnlineBackend(snapshot, connectionState)) {
     return readResidentScopedFallback(
       incidentSettingsCacheKey(resident.site_id),
@@ -1669,6 +1861,10 @@ export async function listIncidentParticipantOptions(
   connectionState: ConnectionState,
   resident: ResidentProfile,
 ) {
+  if (!hasIncidentsModule(snapshot)) {
+    return [];
+  }
+
   const previewOptionMap = new Map<number, IncidentParticipantOption>();
   demoResidents
     .filter((candidate) => candidate.site_id === resident.site_id)
@@ -1721,6 +1917,10 @@ export async function listIncidents(
     topicId?: number | string | "all" | null;
   } = {},
 ) {
+  if (!hasIncidentsModule(snapshot)) {
+    return [];
+  }
+
   const previewIncidents = readScopedPreviewIncidents(resident).filter((incident) => {
     if (filters.status && filters.status !== "all" && incident.status !== filters.status) {
       return false;
@@ -1754,8 +1954,9 @@ export async function listIncidents(
         token: snapshot.token,
       },
     );
-    writeIncidentCache(resident, incidents, filters);
-    return incidents;
+    const normalizedIncidents = incidents.map(normalizeIncidentEntry);
+    writeIncidentCache(resident, normalizedIncidents, filters);
+    return normalizedIncidents;
   } catch {
     return readResidentScopedFallback(
       incidentCacheKey(resident, filters),
@@ -1770,6 +1971,10 @@ export async function getIncident(
   resident: ResidentProfile,
   incidentId: number,
 ) {
+  if (!hasIncidentsModule(snapshot)) {
+    return null;
+  }
+
   const previewIncident =
     readScopedPreviewIncidents(resident).find((incident) => incident.id === incidentId) ??
     readCache<IncidentEntry[]>(incidentCacheKey(resident), []).find(
@@ -1789,17 +1994,21 @@ export async function getIncident(
         token: snapshot.token,
       },
     );
-    if (incident.site?.id != null && Number(incident.site.id) !== resident.site_id) {
+    const normalizedIncident = normalizeIncidentEntry(incident);
+    if (
+      normalizedIncident.site?.id != null &&
+      Number(normalizedIncident.site.id) !== resident.site_id
+    ) {
       return null;
     }
     writeIncidentCache(
       resident,
       upsertIncidentCollection(
         readCache<IncidentEntry[]>(incidentCacheKey(resident), []),
-        incident,
+        normalizedIncident,
       ),
     );
-    return incident;
+    return normalizedIncident;
   } catch {
     return previewIncident;
   }
@@ -1856,11 +2065,7 @@ export async function createIncident(
   resident: ResidentProfile,
   input: CreateIncidentInput,
 ) {
-  if (input.attachment && snapshot.mode === "backend") {
-    throw new Error(
-      "A rota documentada de abertura não aceita anexo. Abra o incidente e registre o anexo em uma interação.",
-    );
-  }
+  assertIncidentsModule(snapshot);
 
   const siteId = input.site_id ?? resident.site_id;
   const residentPersonId =
@@ -1875,7 +2080,7 @@ export async function createIncident(
 
   if (canAttemptBackendRequest(snapshot)) {
     try {
-      const created = await requestJson<IncidentEntry>(
+      const created = normalizeIncidentEntry(await requestJson<IncidentEntry>(
         ACCESS_OS_INCIDENTS_INTEGRATION_PATH,
         {
           baseUrl: snapshot.apiBaseUrl,
@@ -1890,7 +2095,7 @@ export async function createIncident(
             residentPersonId,
           ),
         },
-      );
+      ));
 
       writeIncidentCache(
         resident,
@@ -1899,6 +2104,19 @@ export async function createIncident(
           created,
         ),
       );
+
+      if (input.attachment) {
+        return await sendIncidentMessage(
+          snapshot,
+          connectionState,
+          resident,
+          created.id,
+          {
+            attachment: input.attachment,
+          },
+        );
+      }
+
       return created;
     } catch (error) {
       if (
@@ -2054,6 +2272,8 @@ export async function sendIncidentMessage(
   incidentId: number,
   input: SendIncidentMessageInput,
 ) {
+  assertIncidentsModule(snapshot);
+
   const hasContent = Boolean(input.message_text?.trim() || input.attachment);
   if (!hasContent) {
     throw new Error("Escreva uma mensagem ou anexe mídia para registrar a interação.");
@@ -2063,20 +2283,24 @@ export async function sendIncidentMessage(
     throw new Error("A conversa do incidente exige conexão com o backend neste momento.");
   }
 
-  if (input.attachment && snapshot.mode === "backend") {
-    throw new Error("Anexos em incidentes ainda não estão habilitados no backend.");
-  }
-
   if (isOnlineBackend(snapshot, connectionState)) {
-    const updated = await requestJson<IncidentEntry>(
+    const formData = new FormData();
+    if (input.message_text?.trim()) {
+      formData.append("message_text", input.message_text.trim());
+    }
+    if (input.attachment) {
+      formData.append("attachment", input.attachment, input.attachment.name || "incident-attachment");
+    }
+
+    const updated = normalizeIncidentEntry(await requestForm<IncidentEntry>(
       `/resident-app/incidents/${incidentId}/messages`,
       {
         baseUrl: snapshot.apiBaseUrl,
         token: snapshot.token,
         method: "POST",
-        body: { message_text: input.message_text?.trim() ?? "" },
+        formData,
       },
-    );
+    ));
 
     writeIncidentCache(
       resident,
@@ -2142,6 +2366,8 @@ export async function addIncidentParticipant(
   incidentId: number,
   personId: number,
 ) {
+  assertIncidentsModule(snapshot);
+
   if (snapshot.mode === "backend" && !isOnlineBackend(snapshot, connectionState)) {
     throw new Error("A inclusão de participantes exige conexão com o backend.");
   }
@@ -2230,6 +2456,8 @@ export async function updateIncidentStatus(
   incidentId: number,
   status: IncidentEntry["status"],
 ) {
+  assertIncidentsModule(snapshot);
+
   if (snapshot.mode === "backend" && !isOnlineBackend(snapshot, connectionState)) {
     throw new Error("A atualização do status do incidente exige conexão com o backend.");
   }
@@ -3098,6 +3326,7 @@ type ChatAppMessageResponse = {
   message_text?: string | null;
   created_at: string;
   external_id?: string | null;
+  read_by_others?: boolean;
   metadata?: Record<string, unknown>;
   attachments?: ChatMessage["attachments"];
 };
@@ -3208,6 +3437,7 @@ function mapChatMessage(
       !isAppSender &&
       senderLabel.trim().toLowerCase() === resident.name.trim().toLowerCase(),
     external_id: message.external_id ?? null,
+    read_by_others: Boolean(message.read_by_others),
     metadata: message.metadata ?? {},
     attachments: message.attachments ?? [],
   };
@@ -3738,6 +3968,29 @@ export async function listChatMessages(
   } catch {
     return previewMessages;
   }
+}
+
+export async function markChatConversationRead(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  threadId: number | string,
+  messageUuid?: number | string | null,
+) {
+  if (!isOnlineBackend(snapshot, connectionState)) {
+    return null;
+  }
+
+  return requestJson<{
+    conversation_uuid: string;
+    last_read_message_uuid: string | null;
+  }>(`/chat/app/conversations/${threadId}/read`, {
+    baseUrl: snapshot.apiBaseUrl,
+    token: snapshot.token,
+    method: "POST",
+    body: {
+      message_uuid: messageUuid ? String(messageUuid) : undefined,
+    },
+  });
 }
 
 export async function sendChatMessage(

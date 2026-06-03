@@ -3,6 +3,9 @@ import { motion } from "framer-motion";
 import { io, type Socket } from "socket.io-client";
 import {
   ArrowLeft,
+  Check,
+  CheckCheck,
+  Clock,
   Download,
   Headphones,
   MessageCircle,
@@ -31,9 +34,12 @@ import { useChatCalls } from "@/features/chat-calls/useChatCalls";
 import { useSession } from "@/features/session/SessionProvider";
 import { PageHeader } from "@/features/shared/PageHeader";
 import {
+  CHAT_MODULE_KEY,
   downloadChatAttachment,
   listChatPortariaMessages,
+  markChatConversationRead,
   sendPortariaChatMessage,
+  sessionHasModule,
 } from "@/services/mobile-app.service";
 import type {
   ChatAttachment,
@@ -91,6 +97,7 @@ type ChatMessageSocketPayload = {
   message_text?: string | null;
   created_at?: string;
   external_id?: string | null;
+  read_by_others?: boolean;
   metadata?: Record<string, unknown>;
   attachments?: ChatAttachment[];
 };
@@ -119,9 +126,23 @@ type ChatMessageCreatedEvent = {
   message: ChatMessageSocketPayload;
 };
 
+type ChatMessageReadEvent = {
+  tenant_uuid: string;
+  conversation_uuid: string;
+  last_read_message_uuid?: string | null;
+  reader_kind: string;
+  reader_person_id?: number | null;
+};
+
 type HistoryState = {
   conversation: ChatThread | null;
-  messages: ChatMessage[];
+  messages: ChatMessageWithDeliveryStatus[];
+};
+
+type ChatMessageDeliveryStatus = "pending" | "sent";
+
+type ChatMessageWithDeliveryStatus = ChatMessage & {
+  delivery_status?: ChatMessageDeliveryStatus;
 };
 
 function formatDateTime(value?: string | null) {
@@ -256,7 +277,7 @@ function mapConversation(
 function mapMessage(
   message: ChatMessageSocketPayload,
   currentPersonName: string,
-): ChatMessage {
+): ChatMessageWithDeliveryStatus {
   const isPortariaMessage = String(message.sender_kind ?? "").toUpperCase() === "APP";
   const senderLabel = isPortariaMessage
     ? "Portaria"
@@ -279,8 +300,10 @@ function mapMessage(
       !isPortariaMessage &&
       senderLabel.toLowerCase() === currentPersonName.trim().toLowerCase(),
     external_id: message.external_id ?? null,
+    read_by_others: Boolean(message.read_by_others),
     metadata: message.metadata ?? {},
     attachments: message.attachments ?? [],
+    delivery_status: "sent",
   };
 }
 
@@ -311,9 +334,130 @@ function emitWithResult<T>(
   });
 }
 
-function appendUniqueMessage(messages: ChatMessage[], incoming: ChatMessage) {
+function appendUniqueMessage(
+  messages: ChatMessageWithDeliveryStatus[],
+  incoming: ChatMessageWithDeliveryStatus,
+) {
   if (messages.some((message) => message.uuid === incoming.uuid)) return messages;
+  const pendingMatch = messages.findIndex((message) =>
+    isPendingMessageMatch(message, incoming),
+  );
+  if (pendingMatch >= 0) {
+    return messages.map((message, index) =>
+      index === pendingMatch
+        ? { ...incoming, delivery_status: "sent" as const }
+        : message,
+    );
+  }
   return [...messages, incoming];
+}
+
+function replacePendingMessage(
+  messages: ChatMessageWithDeliveryStatus[],
+  pendingId: string,
+  confirmedMessage: ChatMessageWithDeliveryStatus,
+) {
+  const confirmedKey = getMessageKey(confirmedMessage);
+  const alreadyConfirmed = confirmedKey
+    ? messages.some(
+        (message) =>
+          message.id !== pendingId &&
+          message.uuid !== pendingId &&
+          getMessageKey(message) === confirmedKey,
+      )
+    : false;
+
+  if (alreadyConfirmed) {
+    return removePendingMessage(messages, pendingId);
+  }
+
+  let replaced = false;
+  const nextMessages = messages.map((message) => {
+    if (message.id !== pendingId && message.uuid !== pendingId) return message;
+    replaced = true;
+    return { ...confirmedMessage, delivery_status: "sent" as const };
+  });
+
+  return replaced ? nextMessages : appendUniqueMessage(nextMessages, confirmedMessage);
+}
+
+function removePendingMessage(
+  messages: ChatMessageWithDeliveryStatus[],
+  pendingId: string,
+) {
+  return messages.filter((message) => message.id !== pendingId && message.uuid !== pendingId);
+}
+
+function getMessageKey(message: ChatMessageWithDeliveryStatus) {
+  return message.uuid ?? String(message.id ?? "");
+}
+
+function isPendingMessageMatch(
+  pendingMessage: ChatMessageWithDeliveryStatus,
+  incoming: ChatMessageWithDeliveryStatus,
+) {
+  if (pendingMessage.delivery_status !== "pending") return false;
+  if (!pendingMessage.is_me || !incoming.is_me) return false;
+  if (pendingMessage.text.trim() !== incoming.text.trim()) return false;
+
+  const pendingAttachments = pendingMessage.attachments ?? [];
+  const incomingAttachments = incoming.attachments ?? [];
+  if (pendingAttachments.length !== incomingAttachments.length) return false;
+  if (
+    pendingAttachments.some(
+      (attachment, index) =>
+        attachment.original_name !== incomingAttachments[index]?.original_name,
+    )
+  ) {
+    return false;
+  }
+
+  const pendingTime = new Date(pendingMessage.created_at).getTime();
+  const incomingTime = new Date(incoming.created_at).getTime();
+  if (Number.isNaN(pendingTime) || Number.isNaN(incomingTime)) return true;
+  return Math.abs(incomingTime - pendingTime) < 60_000;
+}
+
+function getLocalAttachmentKind(file: File): ChatAttachment["file_kind"] {
+  if (file.type.startsWith("image/")) return "IMAGE";
+  if (file.type.startsWith("video/")) return "VIDEO";
+  if (file.type.startsWith("audio/")) return "AUDIO";
+  if (file.type) return "DOCUMENT";
+  return "OTHER";
+}
+
+function createPendingMessage(
+  pendingId: string,
+  messageText: string,
+  file: File | null,
+  senderLabel: string,
+): ChatMessageWithDeliveryStatus {
+  return {
+    id: pendingId,
+    uuid: pendingId,
+    text: messageText,
+    created_at: new Date().toISOString(),
+    sender_kind: "PERSON",
+    sender_label: senderLabel,
+    sender_avatar_label: buildAvatarLabel(senderLabel),
+    sender_role: "Morador",
+    is_me: true,
+    external_id: pendingId,
+    read_by_others: false,
+    metadata: { source: "access-suite", optimistic: true },
+    attachments: file
+      ? [
+          {
+            uuid: pendingId,
+            file_kind: getLocalAttachmentKind(file),
+            mime_type: file.type || "application/octet-stream",
+            original_name: file.name,
+            file_size_bytes: file.size,
+          },
+        ]
+      : [],
+    delivery_status: "pending",
+  };
 }
 
 function isPortariaSearch(value: string) {
@@ -354,8 +498,10 @@ export default function ChatPage() {
     lastMessageId: "",
     historyLoading: false,
   });
+  const lastReadMarkerRef = useRef("");
   const residentNameRef = useRef("");
   const { resident, snapshot, connectionState, isAuthenticated } = useSession();
+  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
   const {
     socketStatus: callSocketStatus,
     startPortariaCall,
@@ -401,11 +547,16 @@ export default function ChatPage() {
     if (
       snapshot.mode !== "backend" ||
       !isAuthenticated ||
+      !hasChatModule ||
       !snapshot.token ||
       !currentPersonId
     ) {
       setSocketStatus("idle");
-      setSocketError("Conecte uma sessão backend para usar o chat em tempo real.");
+      setSocketError(
+        hasChatModule
+          ? "Conecte uma sessão backend para usar o chat em tempo real."
+          : "O módulo de chat não está habilitado para este tenant.",
+      );
       return undefined;
     }
 
@@ -472,16 +623,58 @@ export default function ChatPage() {
       });
     };
 
+    const handleMessageRead = (event: ChatMessageReadEvent) => {
+      if (
+        event.reader_kind === "PERSON" &&
+        Number(event.reader_person_id ?? 0) === Number(currentPersonId)
+      ) {
+        return;
+      }
+
+      setHistory((current) => {
+        const activeConversationUuid = String(
+          current.conversation?.uuid ?? current.conversation?.id ?? "",
+        );
+        if (
+          !activeConversationUuid ||
+          activeConversationUuid !== String(event.conversation_uuid)
+        ) {
+          return current;
+        }
+
+        const readMessage = current.messages.find(
+          (message) =>
+            String(message.uuid ?? message.id) ===
+            String(event.last_read_message_uuid ?? ""),
+        );
+        if (!readMessage) return current;
+
+        const readAt = new Date(readMessage.created_at).getTime();
+        return {
+          ...current,
+          messages: current.messages.map((message) => {
+            if (!message.is_me || message.read_by_others) return message;
+            const messageCreatedAt = new Date(message.created_at).getTime();
+            return messageCreatedAt <= readAt
+              ? { ...message, read_by_others: true }
+              : message;
+          }),
+        };
+      });
+    };
+
     socket.on("chat:ready", handleReady);
     socket.on("connect_error", handleConnectError);
     socket.on("disconnect", handleDisconnect);
     socket.on("chat:message:created", handleMessageCreated);
+    socket.on("chat:message:read", handleMessageRead);
 
     return () => {
       socket.off("chat:ready", handleReady);
       socket.off("connect_error", handleConnectError);
       socket.off("disconnect", handleDisconnect);
       socket.off("chat:message:created", handleMessageCreated);
+      socket.off("chat:message:read", handleMessageRead);
       socket.removeAllListeners();
       socket.disconnect();
       socket.close();
@@ -489,6 +682,7 @@ export default function ChatPage() {
     };
   }, [
     currentPersonId,
+    hasChatModule,
     isAuthenticated,
     snapshot.mode,
     snapshot.token,
@@ -496,7 +690,12 @@ export default function ChatPage() {
   ]);
 
   useEffect(() => {
-    if (!socketReady || !socketRef.current || isPortariaSearch(search)) {
+    if (
+      !hasChatModule ||
+      !socketReady ||
+      !socketRef.current ||
+      isPortariaSearch(search)
+    ) {
       setPeople([]);
       setPeopleLoading(false);
       return undefined;
@@ -536,10 +735,10 @@ export default function ChatPage() {
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [search, socketReady]);
+  }, [hasChatModule, search, socketReady]);
 
   useEffect(() => {
-    if (!selectedTarget) {
+    if (!hasChatModule || !selectedTarget) {
       setHistory({ conversation: null, messages: [] });
       lastScrollStateRef.current = {
         targetKey: "",
@@ -571,7 +770,46 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedTarget, socketReady]);
+  }, [hasChatModule, selectedTarget, socketReady]);
+
+  useEffect(() => {
+    if (!selectedTarget || historyLoading || !history.conversation) return;
+
+    const latestConfirmedMessage = [...history.messages]
+      .reverse()
+      .find((message) => !String(message.id ?? "").startsWith("pending-"));
+    const latestMessageId = String(
+      latestConfirmedMessage?.uuid ?? latestConfirmedMessage?.id ?? "",
+    ).trim();
+    if (!latestMessageId) return;
+
+    const conversationId = String(
+      history.conversation.uuid ?? history.conversation.id ?? "",
+    ).trim();
+    if (!conversationId) return;
+
+    const marker = `${conversationId}:${latestMessageId}`;
+    if (lastReadMarkerRef.current === marker) return;
+
+    lastReadMarkerRef.current = marker;
+    void markChatConversationRead(
+      snapshot,
+      connectionState,
+      conversationId,
+      latestMessageId,
+    ).catch(() => {
+      if (lastReadMarkerRef.current === marker) {
+        lastReadMarkerRef.current = "";
+      }
+    });
+  }, [
+    connectionState,
+    history.conversation,
+    history.messages,
+    historyLoading,
+    selectedTarget,
+    snapshot,
+  ]);
 
   useEffect(() => {
     if (!selectedTarget) return undefined;
@@ -678,18 +916,23 @@ export default function ChatPage() {
     };
   }
 
-  async function buildAttachmentPayload() {
-    return selectedFile
+  async function buildAttachmentPayload(file: File | null = selectedFile) {
+    return file
       ? {
-          buffer: await selectedFile.arrayBuffer(),
-          mimetype: selectedFile.type || "application/octet-stream",
-          originalname: selectedFile.name,
-          size: selectedFile.size,
+          buffer: await file.arrayBuffer(),
+          mimetype: file.type || "application/octet-stream",
+          originalname: file.name,
+          size: file.size,
         }
       : undefined;
   }
 
   async function handleSendMessage() {
+    if (!hasChatModule) {
+      toast.error("O módulo de chat não está habilitado para este tenant.");
+      return;
+    }
+
     if (!selectedTarget) {
       toast.error("Selecione um destino do chat.");
       return;
@@ -701,26 +944,44 @@ export default function ChatPage() {
       return;
     }
 
+    const fileToSend = selectedFile;
+    const pendingId = createRequestId("pending");
+    const pendingMessage = createPendingMessage(
+      pendingId,
+      normalizedMessage,
+      fileToSend,
+      residentNameRef.current,
+    );
+
+    setMessageDraft("");
+    setSelectedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setHistory((current) => ({
+      ...current,
+      messages: appendUniqueMessage(current.messages, pendingMessage),
+    }));
     setSending(true);
+
     try {
-      const attachment = await buildAttachmentPayload();
+      const attachment = await buildAttachmentPayload(fileToSend);
       const result =
         selectedTarget.type === "PERSON"
           ? await sendPersonMessage(selectedTarget, normalizedMessage, attachment)
           : await sendPortariaMessage(selectedTarget, normalizedMessage, attachment);
 
-      setMessageDraft("");
-      setSelectedFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-
       setHistory((current) => ({
         conversation: mapConversation(result.conversation, selectedTarget),
-        messages: appendUniqueMessage(
+        messages: replacePendingMessage(
           current.messages,
+          pendingId,
           mapMessage(result.message, residentNameRef.current),
         ),
       }));
     } catch (error) {
+      setHistory((current) => ({
+        ...current,
+        messages: removePendingMessage(current.messages, pendingId),
+      }));
       toast.error(error instanceof Error ? error.message : "Falha ao enviar mensagem.");
     } finally {
       setSending(false);
@@ -821,6 +1082,7 @@ export default function ChatPage() {
         sender_label: message?.sender_label ?? resident.name,
         message_text: message?.text ?? messageText,
         created_at: message?.created_at ?? new Date().toISOString(),
+        read_by_others: Boolean(message?.read_by_others),
         attachments: message?.attachments ?? [],
       },
     };
@@ -830,6 +1092,8 @@ export default function ChatPage() {
     uuid: string;
     original_name: string;
   }) {
+    if (attachment.uuid.startsWith("pending-")) return;
+
     try {
       const blob = await downloadChatAttachment(snapshot, attachment.uuid);
       const url = URL.createObjectURL(blob);
@@ -874,7 +1138,7 @@ export default function ChatPage() {
     const targetSiteName = getTargetSiteName(selectedTarget);
 
     return (
-      <div className="flex h-[calc(100dvh_-_4.25rem_-_env(safe-area-inset-top,0px)_-_env(safe-area-inset-bottom,0px))] max-w-md flex-col overflow-hidden">
+      <div className="flex h-full min-h-0 max-w-md flex-col overflow-hidden">
         <div className="sticky top-0 z-20 shrink-0 bg-primary px-4 pb-4 pt-8 text-primary-foreground">
           <div className="flex items-start gap-3">
             <Button
@@ -990,6 +1254,7 @@ export default function ChatPage() {
                             ? "bg-primary-foreground/10 text-primary-foreground"
                             : "bg-muted text-foreground"
                         }`}
+                        disabled={attachment.uuid.startsWith("pending-")}
                         onClick={() => void handleDownloadAttachment(attachment)}
                       >
                         <Download className="h-3.5 w-3.5 shrink-0" />
@@ -1004,13 +1269,22 @@ export default function ChatPage() {
                   </div>
                 ) : null}
                 <p
-                  className={`mt-2 text-[10px] ${
+                  className={`mt-2 flex items-center justify-end gap-1 text-[10px] ${
                     chatMessage.is_me
                       ? "text-primary-foreground/60"
                       : "text-muted-foreground"
                   }`}
                 >
-                  {formatDateTime(chatMessage.created_at)}
+                  <span>{formatDateTime(chatMessage.created_at)}</span>
+                  {chatMessage.is_me ? (
+                    chatMessage.delivery_status === "pending" ? (
+                      <Clock className="h-3 w-3" aria-label="Mensagem aguardando envio" />
+                    ) : chatMessage.read_by_others ? (
+                      <CheckCheck className="h-3 w-3" aria-label="Mensagem visualizada" />
+                    ) : (
+                      <Check className="h-3 w-3" aria-label="Mensagem enviada" />
+                    )
+                  ) : null}
                 </p>
               </div>
             </motion.div>
@@ -1023,7 +1297,7 @@ export default function ChatPage() {
           ) : null}
         </div>
 
-        <div className="shrink-0 space-y-3 border-t border-border bg-card px-4 py-3">
+        <div className="shrink-0 space-y-3 border-t border-border bg-card px-4 pb-0 pt-3">
           {selectedFile ? (
             <div className="flex items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-xs text-muted-foreground">
               <Paperclip className="h-4 w-4" />
@@ -1082,6 +1356,21 @@ export default function ChatPage() {
   }
 
   const isBackendReady = snapshot.mode === "backend" && isAuthenticated;
+
+  if (!hasChatModule) {
+    return (
+      <div className="space-y-4 px-4 pb-6 pt-8">
+        <PageHeader
+          title="Chat"
+          subtitle="O módulo de chat não está habilitado para este tenant."
+          backTo="/"
+        />
+        <div className="rounded-[22px] border border-border bg-card px-4 py-4 text-sm text-muted-foreground shadow-sm">
+          A liberação deve ser feita pelo admin do tenant.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 px-4 pb-6 pt-8">

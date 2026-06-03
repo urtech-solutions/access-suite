@@ -24,7 +24,12 @@ import {
   type ResidentNotification,
 } from "@/features/notifications/resident-notifications";
 import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
-import { approveVisitor, rejectVisitor } from "@/services/mobile-app.service";
+import {
+  INCIDENTS_MODULE_KEY,
+  approveVisitor,
+  rejectVisitor,
+  sessionHasModule,
+} from "@/services/mobile-app.service";
 
 function formatWhen(value: string) {
   return new Date(value).toLocaleString("pt-BR", {
@@ -78,21 +83,36 @@ const NotificationsPage = () => {
     connectionState,
     notifications,
     readMap,
-    unreadCount,
     unreadByModule,
     markAsRead,
   } = useResidentNotificationCenter();
+  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  const visibleNotifications = useMemo(
+    () =>
+      hasIncidentsModule
+        ? notifications
+        : notifications.filter(
+            (notification) => !notification.kind.startsWith("INCIDENT_"),
+          ),
+    [hasIncidentsModule, notifications],
+  );
+  const visibleUnreadCount = useMemo(
+    () =>
+      visibleNotifications.filter((notification) => !readMap[notification.id])
+        .length,
+    [readMap, visibleNotifications],
+  );
 
-  const pendingApprovalCount = notifications.filter(
+  const pendingApprovalCount = visibleNotifications.filter(
     (notification) => notification.kind === "VISITOR_PENDING_APPROVAL",
   ).length;
 
   const operationalCount = useMemo(
     () =>
-      notifications.filter(
+      visibleNotifications.filter(
         (notification) => notification.kind !== "VISITOR_PENDING_APPROVAL",
       ).length,
-    [notifications],
+    [visibleNotifications],
   );
 
   const approveMutation = useMutation({
@@ -143,7 +163,7 @@ const NotificationsPage = () => {
     <div className="space-y-6 px-4 pb-6 pt-8">
       <PageHeader
         title="Notificações"
-        subtitle="Inbox unificada de visitantes, entregas, incidentes, mural e chat."
+        subtitle="Inbox unificada de visitantes, entregas, mural e chat."
         backTo="/"
       />
 
@@ -159,8 +179,8 @@ const NotificationsPage = () => {
                 : "Cadastros aguardando sua aprovação e confirmações de uso dos convites."}
             </p>
           </div>
-          <Badge variant={unreadCount > 0 ? "warning" : "secondary"}>
-            {unreadCount} não lida{unreadCount === 1 ? "" : "s"}
+          <Badge variant={visibleUnreadCount > 0 ? "warning" : "secondary"}>
+            {`${visibleUnreadCount} não lida${visibleUnreadCount === 1 ? "" : "s"}`}
           </Badge>
         </div>
 
@@ -173,12 +193,14 @@ const NotificationsPage = () => {
           </div>
         </div>
 
-        {unreadCount > 0 ? (
+        {visibleUnreadCount > 0 ? (
           <div className="mt-4 flex justify-end">
             <Button
               variant="outline"
               className="rounded-full"
-              onClick={() => markAsRead(notifications.map((item) => item.id))}
+              onClick={() =>
+                markAsRead(visibleNotifications.map((item) => item.id))
+              }
             >
               <BellRing className="h-4 w-4" />
               Marcar tudo como lido
@@ -188,7 +210,7 @@ const NotificationsPage = () => {
       </div>
 
       <div className="space-y-3">
-        {notifications.map((notification) => {
+        {visibleNotifications.map((notification) => {
           const Icon = notificationIcon(notification);
           const isRead = Boolean(readMap[notification.id]);
           const isPendingApproval =
@@ -292,14 +314,14 @@ const NotificationsPage = () => {
           );
         })}
 
-        {notifications.length === 0 ? (
+        {visibleNotifications.length === 0 ? (
           <div className="rounded-[24px] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
             Nenhuma notificação operacional disponível para este contexto.
           </div>
         ) : null}
       </div>
 
-      {notifications.length > 0 ? (
+      {visibleNotifications.length > 0 ? (
         <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
           <p className="text-sm font-semibold text-foreground">
             Distribuição por módulo
@@ -311,9 +333,11 @@ const NotificationsPage = () => {
             <Badge variant="secondary">
               Entregas {unreadByModule.DELIVERIES ?? 0}
             </Badge>
-            <Badge variant="secondary">
-              Incidentes {unreadByModule.INCIDENTS ?? 0}
-            </Badge>
+            {hasIncidentsModule ? (
+              <Badge variant="secondary">
+                Incidentes {unreadByModule.INCIDENTS ?? 0}
+              </Badge>
+            ) : null}
             <Badge variant="secondary">
               Mural {unreadByModule.BULLETIN ?? 0}
             </Badge>

@@ -3,6 +3,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { io, type Socket } from "socket.io-client";
 
 import { useSession } from "@/features/session/SessionProvider";
+import {
+  CHAT_MODULE_KEY,
+  INCIDENTS_MODULE_KEY,
+  sessionHasModule,
+} from "@/services/mobile-app.service";
 
 type RealtimeModuleEvent = {
   event_id?: string;
@@ -61,6 +66,8 @@ export function ResidentRealtimeBridge() {
     () => resolveSocketBaseUrl(snapshot.apiBaseUrl),
     [snapshot.apiBaseUrl],
   );
+  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
+  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
 
   useEffect(() => {
     if (
@@ -89,6 +96,7 @@ export function ResidentRealtimeBridge() {
 
     const handleChatEvent = (event: RealtimeModuleEvent) => {
       if (!isNewEvent(seenEventsRef, event)) return;
+      if (!hasChatModule) return;
       if (Number(event.site_id ?? 0) !== Number(resident.site_id)) return;
 
       void queryClient.invalidateQueries({ queryKey: ["chat-threads"] });
@@ -111,6 +119,7 @@ export function ResidentRealtimeBridge() {
 
     const handleIncidentEvent = (event: RealtimeModuleEvent) => {
       if (!isNewEvent(seenEventsRef, event)) return;
+      if (!hasIncidentsModule) return;
       if (Number(event.site_id ?? 0) !== Number(resident.site_id)) return;
 
       void queryClient.invalidateQueries({ queryKey: ["incidents"] });
@@ -144,6 +153,8 @@ export function ResidentRealtimeBridge() {
     isAuthenticated,
     queryClient,
     resident.site_id,
+    hasChatModule,
+    hasIncidentsModule,
     snapshot.mode,
     snapshot.token,
     socketBaseUrl,

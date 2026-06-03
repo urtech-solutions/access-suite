@@ -991,6 +991,22 @@ export async function hydrateBackendSession(snapshot: SessionSnapshot) {
   return applySessionIdentity(snapshot, response);
 }
 
+// Morador troca a própria senha do app (substitui a senha inicial padrão).
+export async function changeResidentPassword(
+  newPassword: string,
+  snapshot: SessionSnapshot,
+) {
+  return requestJson<{ success: boolean }>(
+    "/auth/person-app/change-password",
+    {
+      baseUrl: snapshot.apiBaseUrl,
+      method: "POST",
+      token: snapshot.token ?? undefined,
+      body: { new_password: newPassword },
+    },
+  );
+}
+
 export async function getResidentWebPushConfig(baseUrl?: string) {
   return requestJson<PushConfigResponse>("/push/config", {
     baseUrl,

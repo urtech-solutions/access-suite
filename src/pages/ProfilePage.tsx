@@ -36,7 +36,10 @@ import { ResidenceContextToggle } from "@/features/session/ActiveResidenceSwitch
 import { ConnectivityPill } from "@/features/shared/ConnectivityPill";
 import { useSession } from "@/features/session/SessionProvider";
 import { formatResidentContextMeta } from "@/features/session/resident-context";
-import { normalizeApiBaseUrl } from "@/services/mobile-app.service";
+import {
+  changeResidentPassword,
+  normalizeApiBaseUrl,
+} from "@/services/mobile-app.service";
 
 function avatarStorageKey(residentId: number) {
   return `sv-mobile:avatar:${residentId}`;
@@ -96,6 +99,31 @@ const ProfilePage = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [apiBaseUrl, setApiBaseUrlInput] = useState(snapshot.apiBaseUrl);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  async function handleChangePassword() {
+    if (newPassword.length < 4) {
+      toast.error("A nova senha deve ter ao menos 4 caracteres.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error("A confirmação não corresponde à nova senha.");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await changeResidentPassword(newPassword, snapshot);
+      toast.success("Senha alterada com sucesso.");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch {
+      toast.error("Não foi possível alterar a senha.");
+    } finally {
+      setChangingPassword(false);
+    }
+  }
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
 
   const isSyndic = resident.role === "SINDICO";
@@ -377,6 +405,36 @@ const ProfilePage = () => {
                 className="h-12 rounded-[16px]"
               />
             </div>
+
+            {snapshot.mode === "backend" && snapshot.token ? (
+              <div className="space-y-2 rounded-[16px] border p-3">
+                <Label className="text-xs text-muted-foreground">
+                  Trocar senha do app
+                </Label>
+                <Input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Nova senha"
+                  className="h-12 rounded-[16px]"
+                />
+                <Input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirmar nova senha"
+                  className="h-12 rounded-[16px]"
+                />
+                <Button
+                  variant="secondary"
+                  className="w-full rounded-[16px]"
+                  onClick={handleChangePassword}
+                  disabled={changingPassword}
+                >
+                  {changingPassword ? "Salvando..." : "Salvar nova senha"}
+                </Button>
+              </div>
+            ) : null}
 
             <Button
               variant="secondary"

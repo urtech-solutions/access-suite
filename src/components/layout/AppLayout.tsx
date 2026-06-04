@@ -9,7 +9,13 @@ import {
 } from "lucide-react";
 
 import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
+import { useSession } from "@/features/session/SessionProvider";
 import { cn } from "@/lib/utils";
+import {
+  CHAT_MODULE_KEY,
+  INCIDENTS_MODULE_KEY,
+  sessionHasModule,
+} from "@/services/mobile-app.service";
 
 const tabs = [
   { path: "/", icon: Home, label: "Início", exact: true },
@@ -33,7 +39,15 @@ const tabs = [
 const AppLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { snapshot } = useSession();
   const { attentionCounts } = useResidentNotificationCenter();
+  const isChatRoute = location.pathname.startsWith("/chat");
+  const visibleTabs = tabs.filter(
+    (tab) =>
+      (tab.path !== "/chat" || sessionHasModule(snapshot, CHAT_MODULE_KEY)) &&
+      (tab.path !== "/porteiro/incidentes" ||
+        sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)),
+  );
 
   function isTabActive(tab: (typeof tabs)[number]) {
     if (tab.exact) return location.pathname === tab.path;
@@ -48,70 +62,79 @@ const AppLayout = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="h-dvh min-h-dvh overflow-hidden bg-background">
       {/* Decorative backdrop gradients */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
         <div className="absolute left-1/2 top-0 h-72 w-[28rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,_rgba(10,22,51,0.10),_transparent_62%)]" />
         <div className="absolute right-[-5rem] top-24 h-44 w-44 rounded-full bg-[radial-gradient(circle,_rgba(245,158,11,0.14),_transparent_68%)]" />
       </div>
 
-      <div className="relative mx-auto flex min-h-screen w-full max-w-md flex-col">
+      <div className="relative mx-auto flex h-full min-h-0 w-full max-w-md flex-col">
         {/* Content area: safe-top para status bar, pb dinâmico para nav bar */}
-        <main className="scroll-container flex-1 overflow-y-auto pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] safe-top">
+        <main
+          className={cn(
+            "scroll-container min-h-0 flex-1 overflow-y-auto safe-top",
+            isChatRoute
+              ? "pb-0"
+              : "pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))]",
+          )}
+        >
           <Outlet />
         </main>
 
         {/* Bottom navigation */}
-        <nav className="fixed bottom-0 left-1/2 z-50 w-full max-w-md -translate-x-1/2 px-3 pb-2 safe-bottom">
-          <div
-            className={cn(
-              "grid rounded-[26px] border border-border/60 bg-card/95 px-1.5 py-1.5 shadow-2xl shadow-black/12 backdrop-blur-xl",
-              tabs.length > 5 ? "grid-cols-6" : "grid-cols-5",
-            )}
-          >
-            {tabs.map((tab) => {
-              const active = isTabActive(tab);
-              const badge = resolveTabBadge(tab.path);
-              return (
-                <button
-                  key={tab.path}
-                  onClick={() => navigate(tab.path)}
-                  className={cn(
-                    "relative flex flex-col items-center gap-1 rounded-[20px] px-1 py-2.5 transition-all duration-200 active:scale-95",
-                    active
-                      ? "bg-primary text-primary-foreground shadow-md shadow-primary/25"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {badge > 0 && (
-                    <span
-                      className={cn(
-                        "absolute right-1.5 top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none",
-                        active
-                          ? "bg-primary-foreground text-primary"
-                          : "bg-primary text-primary-foreground",
-                      )}
-                    >
-                      {badge > 9 ? "9+" : badge}
-                    </span>
-                  )}
-                  <tab.icon
-                    className="h-[20px] w-[20px] transition-transform duration-200"
-                    strokeWidth={active ? 2.5 : 1.8}
-                  />
-                  <span
+        {!isChatRoute ? (
+          <nav className="fixed bottom-0 left-1/2 z-50 w-full max-w-md -translate-x-1/2 px-3 pb-2 safe-bottom">
+            <div
+              className={cn(
+                "grid rounded-[26px] border border-border/60 bg-card/95 px-1.5 py-1.5 shadow-2xl shadow-black/12 backdrop-blur-xl",
+                visibleTabs.length > 5 ? "grid-cols-6" : "grid-cols-5",
+              )}
+            >
+              {visibleTabs.map((tab) => {
+                const active = isTabActive(tab);
+                const badge = resolveTabBadge(tab.path);
+                return (
+                  <button
+                    key={tab.path}
+                    onClick={() => navigate(tab.path)}
                     className={cn(
-                      "text-[10px] font-semibold leading-none tracking-wide",
-                      active ? "opacity-100" : "opacity-60",
+                      "relative flex flex-col items-center gap-1 rounded-[20px] px-1 py-2.5 transition-all duration-200 active:scale-95",
+                      active
+                        ? "bg-primary text-primary-foreground shadow-md shadow-primary/25"
+                        : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    {tab.label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </nav>
+                    {badge > 0 && (
+                      <span
+                        className={cn(
+                          "absolute right-1.5 top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none",
+                          active
+                            ? "bg-primary-foreground text-primary"
+                            : "bg-primary text-primary-foreground",
+                        )}
+                      >
+                        {badge > 9 ? "9+" : badge}
+                      </span>
+                    )}
+                    <tab.icon
+                      className="h-[20px] w-[20px] transition-transform duration-200"
+                      strokeWidth={active ? 2.5 : 1.8}
+                    />
+                    <span
+                      className={cn(
+                        "text-[10px] font-semibold leading-none tracking-wide",
+                        active ? "opacity-100" : "opacity-60",
+                      )}
+                    >
+                      {tab.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        ) : null}
       </div>
     </div>
   );

@@ -12,8 +12,10 @@ export default defineConfig(({ mode }) => {
   const proxyTarget =
     env.VITE_DEV_API_PROXY_TARGET?.trim() || "http://localhost:3000";
   const keepApiPrefix = env.VITE_DEV_API_PROXY_KEEP_PREFIX === "true";
-  const appBasePath = env.VITE_APP_BASE_PATH?.trim() || "/";
-  const devServerPort = Number(env.VITE_DEV_SERVER_PORT || 5173);
+  const appBasePath = env.VITE_APP_BASE_PATH?.trim() || "/access-os/";
+  const devServerPort = Number(
+    env.VITE_DEV_SERVER_PORT || env.ACCESS_SUITE_DEV_PORT || 8088,
+  );
   const devServerHost = env.VITE_DEV_SERVER_HOST?.trim() || "0.0.0.0";
   const devHttpsEnabled = env.VITE_DEV_HTTPS === "true";
   const devApiMockEnabled = env.VITE_DEV_API_MOCK === "true";

@@ -3,7 +3,7 @@
 # =============================================================================
 # Padrao:
 #   docker compose up -d --build
-#   # App runtime disponivel em http://SEU_IP_LOCAL:${ACCESS_SUITE_PORT:-8088}
+#   # App runtime disponivel em http://SEU_IP_LOCAL:${ACCESS_SUITE_PORT:-8088}${VITE_APP_BASE_PATH:-/access-os/}
 #   # Configurado para refletir o ambiente real do app (modo backend)
 #
 # Desenvolvimento com hot reload:
@@ -23,8 +23,9 @@ services:
       dockerfile: Dockerfile
       target: runtime
       args:
-        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_API_URL: ${VITE_API_URL:-/api}
         VITE_APP_MODE: ${VITE_APP_MODE:-backend}
+        VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/access-os/}
     image: accessos/access-suite:runtime
     restart: unless-stopped
     ports:

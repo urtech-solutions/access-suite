@@ -8,6 +8,7 @@ import {
 } from "react-router-dom";
 
 import AppLayout from "@/components/layout/AppLayout";
+import { ChatCallsProvider } from "@/features/chat-calls/ChatCallsProvider";
 import { ResidentNotificationsBridge } from "@/features/notifications/ResidentNotificationsBridge";
 import { ResidentWebPushBridge } from "@/features/notifications/ResidentWebPushBridge";
 import { ResidentRealtimeBridge } from "@/features/realtime/ResidentRealtimeBridge";
@@ -64,12 +65,12 @@ const ProtectedShell = () => {
   }
 
   return (
-    <>
+    <ChatCallsProvider>
       <ResidentRealtimeBridge />
       <ResidentNotificationsBridge />
       <ResidentWebPushBridge />
       <AppLayout />
-    </>
+    </ChatCallsProvider>
   );
 };
 

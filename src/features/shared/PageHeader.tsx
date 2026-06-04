@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 type PageHeaderProps = {
   title: string;
   subtitle?: string;
   backTo?: string;
   action?: ReactNode;
+  className?: string;
 };
 
 export function PageHeader({
@@ -15,11 +17,17 @@ export function PageHeader({
   subtitle,
   backTo,
   action,
+  className,
 }: PageHeaderProps) {
   const navigate = useNavigate();
 
   return (
-    <div className="sticky top-0 z-30 flex items-center gap-3 bg-background/80 px-4 pb-3 pt-5 backdrop-blur-lg safe-top">
+    <div
+      className={cn(
+        "sticky top-0 z-30 flex items-center gap-3 bg-background/80 px-4 pb-3 pt-[calc(1.25rem+env(safe-area-inset-top,0px))] backdrop-blur-lg",
+        className,
+      )}
+    >
       {backTo && (
         <Button
           variant="ghost"

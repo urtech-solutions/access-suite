@@ -1,35 +1,149 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { io, type Socket } from "socket.io-client";
 import {
-  AlertTriangle,
+  ArrowLeft,
+  Check,
+  CheckCheck,
+  Clock,
+  Download,
+  Headphones,
   MessageCircle,
+  Paperclip,
   Phone,
   Search,
   Send,
-  ShieldBan,
-  UserPlus,
-  Video,
+  Wifi,
+  WifiOff,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { useChatCalls } from "@/features/chat-calls/useChatCalls";
 import { useSession } from "@/features/session/SessionProvider";
 import { PageHeader } from "@/features/shared/PageHeader";
 import {
-  approveChatThread,
-  blockChatThread,
-  createChatThread,
-  getChatSettings,
-  listChatContacts,
-  listChatMessages,
-  listChatThreads,
-  rejectChatThread,
-  sendChatMessage,
+  CHAT_MODULE_KEY,
+  downloadChatAttachment,
+  listChatPortariaMessages,
+  markChatConversationRead,
+  sendPortariaChatMessage,
+  sessionHasModule,
 } from "@/services/mobile-app.service";
+import type {
+  ChatAttachment,
+  ChatContact,
+  ChatMessage,
+  ChatThread,
+} from "@/services/mobile-app.types";
+
+type ChatTarget =
+  | {
+      type: "PERSON";
+      targetPersonId: number;
+      site_id: number;
+      person: ChatContact;
+    }
+  | {
+      type: "PORTARIA";
+      site_id: number;
+      name: "Portaria";
+      site_name?: string | null;
+    };
+
+type ChatReadyPayload = {
+  socketId: string;
+  tenant_uuid: string;
+  person_id: number;
+};
+
+type ChatPersonSocketPayload = {
+  id: number;
+  name: string;
+  site_id: number;
+  site_name?: string | null;
+  conversation_uuid?: string | null;
+  last_message_at?: string | null;
+};
+
+type ChatConversationSocketPayload = {
+  uuid: string;
+  conversation_type: "DIRECT" | "PORTARIA";
+  site_id: number;
+  person_a_id: number;
+  person_b_id: number | null;
+  title?: string | null;
+  status: "OPEN" | "CLOSED" | string;
+  last_message_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type ChatMessageSocketPayload = {
+  uuid: string;
+  sender_kind: string;
+  sender_label: string;
+  message_text?: string | null;
+  created_at?: string;
+  external_id?: string | null;
+  read_by_others?: boolean;
+  metadata?: Record<string, unknown>;
+  attachments?: ChatAttachment[];
+};
+
+type ChatPeopleSearchResult = {
+  requestId: string;
+  people: ChatPersonSocketPayload[];
+};
+
+type ChatHistoryResult = {
+  requestId: string;
+  conversation: ChatConversationSocketPayload | null;
+  messages: ChatMessageSocketPayload[];
+};
+
+type ChatMessageSent = {
+  requestId: string;
+  conversation: ChatConversationSocketPayload;
+  message: ChatMessageSocketPayload;
+};
+
+type ChatMessageCreatedEvent = {
+  tenant_uuid: string;
+  conversation_uuid: string;
+  conversation: ChatConversationSocketPayload;
+  message: ChatMessageSocketPayload;
+};
+
+type ChatMessageReadEvent = {
+  tenant_uuid: string;
+  conversation_uuid: string;
+  last_read_message_uuid?: string | null;
+  reader_kind: string;
+  reader_person_id?: number | null;
+};
+
+type HistoryState = {
+  conversation: ChatThread | null;
+  messages: ChatMessageWithDeliveryStatus[];
+};
+
+type ChatMessageDeliveryStatus = "pending" | "sent";
+
+type ChatMessageWithDeliveryStatus = ChatMessage & {
+  delivery_status?: ChatMessageDeliveryStatus;
+};
 
 function formatDateTime(value?: string | null) {
   if (!value) return "";
@@ -41,243 +155,1074 @@ function formatDateTime(value?: string | null) {
   }).format(parsed);
 }
 
-export default function ChatPage() {
-  const queryClient = useQueryClient();
-  const { resident, snapshot, connectionState } = useSession();
-  const [selectedChatId, setSelectedChatId] = useState<number | null>(null);
-  const [messageDraft, setMessageDraft] = useState("");
-  const [search, setSearch] = useState("");
-  const [contactPickerOpen, setContactPickerOpen] = useState(false);
-  const [selectedContactId, setSelectedContactId] = useState<number | null>(null);
-  const [contactMessageDraft, setContactMessageDraft] = useState("");
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
 
-  const settingsQuery = useQuery({
-    queryKey: ["chat-settings", resident.id, snapshot.mode, connectionState],
-    queryFn: () => getChatSettings(snapshot, connectionState),
-  });
-
-  const threadsQuery = useQuery({
-    queryKey: ["chat-threads", resident.id, snapshot.mode, connectionState],
-    queryFn: () => listChatThreads(snapshot, connectionState, resident),
-    enabled: settingsQuery.data?.enabled !== false,
-    refetchInterval: snapshot.mode === "backend" ? 15_000 : false,
-  });
-
-  const contactsQuery = useQuery({
-    queryKey: ["chat-contacts", resident.id, snapshot.mode, connectionState],
-    queryFn: () => listChatContacts(snapshot, connectionState, resident),
-    enabled:
-      settingsQuery.data?.enabled !== false &&
-      settingsQuery.data?.allow_direct_messages === true,
-  });
-
-  const selectedThread = useMemo(
-    () =>
-      (threadsQuery.data ?? []).find((thread) => thread.id === selectedChatId) ?? null,
-    [selectedChatId, threadsQuery.data],
+function buildAvatarLabel(name: string) {
+  return (
+    name
+      .split(" ")
+      .slice(0, 2)
+      .map((part) => part[0] ?? "")
+      .join("")
+      .toUpperCase() || "SV"
   );
+}
 
-  const messagesQuery = useQuery({
-    queryKey: ["chat-messages", resident.id, selectedChatId, snapshot.mode, connectionState],
-    queryFn: () =>
-      selectedChatId
-        ? listChatMessages(snapshot, connectionState, resident, selectedChatId)
-        : [],
-    enabled: Boolean(selectedChatId),
+function resolveSocketBaseUrl(apiBaseUrl?: string | null) {
+  const normalized = String(apiBaseUrl ?? "").trim();
+  if (!normalized) return window.location.origin.replace(/\/+$/, "");
+  if (/^\/api\/?$/i.test(normalized)) return window.location.origin;
+
+  try {
+    const resolved = new URL(normalized, window.location.origin);
+    resolved.pathname = resolved.pathname
+      .replace(/\/api\/?$/i, "")
+      .replace(/\/+$/, "");
+    return `${resolved.origin}${resolved.pathname}`;
+  } catch {
+    return normalized.replace(/\/api\/?$/i, "").replace(/\/+$/, "");
+  }
+}
+
+function createRequestId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function mapPerson(person: ChatPersonSocketPayload): ChatContact {
+  return {
+    person_id: person.id,
+    name: person.name,
+    site_id: person.site_id,
+    site_name: person.site_name ?? null,
+    conversation_uuid: person.conversation_uuid ?? null,
+    last_message_at: person.last_message_at ?? null,
+    unit_label: person.site_name ?? null,
+    avatar_label: buildAvatarLabel(person.name),
+  };
+}
+
+function createPersonTarget(person: ChatContact): ChatTarget {
+  return {
+    type: "PERSON",
+    targetPersonId: person.person_id,
+    site_id: person.site_id ?? 0,
+    person,
+  };
+}
+
+function createPortariaTarget(siteId: number, siteName?: string | null): ChatTarget {
+  return {
+    type: "PORTARIA",
+    site_id: siteId,
+    name: "Portaria",
+    site_name: siteName ?? null,
+  };
+}
+
+function getTargetName(target: ChatTarget) {
+  return target.type === "PORTARIA" ? target.name : target.person.name;
+}
+
+function getTargetSiteName(target: ChatTarget) {
+  return target.type === "PORTARIA"
+    ? target.site_name
+    : target.person.site_name ?? target.person.unit_label;
+}
+
+function getTargetAvatar(target: ChatTarget) {
+  return target.type === "PORTARIA" ? "PT" : target.person.avatar_label;
+}
+
+function mapConversation(
+  conversation: ChatConversationSocketPayload,
+  target: ChatTarget,
+): ChatThread {
+  const status = String(conversation.status ?? "").toUpperCase();
+  const targetName = getTargetName(target);
+
+  return {
+    id: conversation.uuid,
+    uuid: conversation.uuid,
+    type: conversation.conversation_type === "PORTARIA" ? "PORTARIA" : "DIRECT",
+    status: status === "OPEN" ? "ACTIVE" : "CLOSED",
+    site_id: conversation.site_id,
+    site_name: getTargetSiteName(target) ?? null,
+    title: conversation.title?.trim() || targetName,
+    counterpart_label: targetName,
+    counterpart_unit_label: getTargetSiteName(target) ?? null,
+    counterpart_avatar_label: getTargetAvatar(target),
+    last_message_preview: "",
+    last_message_at:
+      conversation.last_message_at ??
+      conversation.updated_at ??
+      conversation.created_at ??
+      null,
+    last_sender_label: null,
+    unread_count: 0,
+    requires_my_approval: false,
+    can_reply: status === "OPEN",
+    can_block: false,
+    can_approve: false,
+    can_reject: false,
+    blocked_by_me: false,
+    pending_other_approval: false,
+  };
+}
+
+function mapMessage(
+  message: ChatMessageSocketPayload,
+  currentPersonName: string,
+): ChatMessageWithDeliveryStatus {
+  const isPortariaMessage = String(message.sender_kind ?? "").toUpperCase() === "APP";
+  const senderLabel = isPortariaMessage
+    ? "Portaria"
+    : String(message.sender_label ?? "Pessoa").trim() || "Pessoa";
+
+  return {
+    id: message.uuid,
+    uuid: message.uuid,
+    text: String(message.message_text ?? ""),
+    created_at: message.created_at ?? new Date().toISOString(),
+    sender_kind: message.sender_kind,
+    sender_label: senderLabel,
+    sender_avatar_label: isPortariaMessage ? "PT" : buildAvatarLabel(senderLabel),
+    sender_role: isPortariaMessage
+      ? "Portaria"
+      : message.sender_kind === "PERSON"
+        ? "Pessoa"
+        : null,
+    is_me:
+      !isPortariaMessage &&
+      senderLabel.toLowerCase() === currentPersonName.trim().toLowerCase(),
+    external_id: message.external_id ?? null,
+    read_by_others: Boolean(message.read_by_others),
+    metadata: message.metadata ?? {},
+    attachments: message.attachments ?? [],
+    delivery_status: "sent",
+  };
+}
+
+function emitWithResult<T>(
+  socket: Socket,
+  eventName: string,
+  resultEventName: string,
+  payload: Record<string, unknown>,
+  timeoutMs = 12_000,
+) {
+  const requestId = String(payload.requestId);
+
+  return new Promise<T>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      socket.off(resultEventName, handleResult);
+      reject(new Error("Tempo esgotado aguardando resposta do chat."));
+    }, timeoutMs);
+
+    function handleResult(result: { requestId?: string }) {
+      if (result?.requestId !== requestId) return;
+      window.clearTimeout(timeout);
+      socket.off(resultEventName, handleResult);
+      resolve(result as T);
+    }
+
+    socket.on(resultEventName, handleResult);
+    socket.emit(eventName, payload);
   });
+}
 
-  const createThreadMutation = useMutation({
-    mutationFn: (payload: {
-      type: "PORTARIA" | "DIRECT";
-      recipient_person_id?: number;
-      message_text?: string;
-    }) => createChatThread(snapshot, connectionState, resident, payload),
-    onSuccess: async (thread) => {
-      await queryClient.invalidateQueries({ queryKey: ["chat-threads"] });
-      setSelectedChatId(thread?.id ?? null);
-      setContactPickerOpen(false);
-      setSelectedContactId(null);
-      setContactMessageDraft("");
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Falha ao abrir a conversa."),
-  });
-
-  const sendMessageMutation = useMutation({
-    mutationFn: () =>
-      selectedChatId
-        ? sendChatMessage(
-            snapshot,
-            connectionState,
-            resident,
-            selectedChatId,
-            messageDraft,
-          )
-        : Promise.resolve(null),
-    onSuccess: async () => {
-      setMessageDraft("");
-      await queryClient.invalidateQueries({ queryKey: ["chat-threads"] });
-      await queryClient.invalidateQueries({ queryKey: ["chat-messages"] });
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Falha ao enviar mensagem."),
-  });
-
-  const approveMutation = useMutation({
-    mutationFn: (threadId: number) =>
-      approveChatThread(snapshot, connectionState, resident, threadId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["chat-threads"] });
-      await queryClient.invalidateQueries({ queryKey: ["chat-messages"] });
-      toast.success("Conversa aprovada.");
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Falha ao aprovar conversa."),
-  });
-
-  const rejectMutation = useMutation({
-    mutationFn: (threadId: number) =>
-      rejectChatThread(snapshot, connectionState, resident, threadId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["chat-threads"] });
-      await queryClient.invalidateQueries({ queryKey: ["chat-messages"] });
-      toast.success("Conversa rejeitada.");
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Falha ao rejeitar conversa."),
-  });
-
-  const blockMutation = useMutation({
-    mutationFn: (threadId: number) =>
-      blockChatThread(snapshot, connectionState, resident, threadId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["chat-threads"] });
-      await queryClient.invalidateQueries({ queryKey: ["chat-messages"] });
-      toast.success("Conversa bloqueada.");
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Falha ao bloquear conversa."),
-  });
-
-  const filteredThreads = useMemo(
-    () =>
-      (threadsQuery.data ?? []).filter((thread) => {
-        const haystack = [
-          thread.title,
-          thread.counterpart_label,
-          thread.last_message_preview,
-        ]
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(search.toLowerCase());
-      }),
-    [search, threadsQuery.data],
+function appendUniqueMessage(
+  messages: ChatMessageWithDeliveryStatus[],
+  incoming: ChatMessageWithDeliveryStatus,
+) {
+  if (messages.some((message) => message.uuid === incoming.uuid)) return messages;
+  const pendingMatch = messages.findIndex((message) =>
+    isPendingMessageMatch(message, incoming),
   );
+  if (pendingMatch >= 0) {
+    return messages.map((message, index) =>
+      index === pendingMatch
+        ? { ...incoming, delivery_status: "sent" as const }
+        : message,
+    );
+  }
+  return [...messages, incoming];
+}
 
-  const contacts = contactsQuery.data ?? [];
-  const selectedContact =
-    contacts.find((contact) => contact.person_id === selectedContactId) ?? null;
+function replacePendingMessage(
+  messages: ChatMessageWithDeliveryStatus[],
+  pendingId: string,
+  confirmedMessage: ChatMessageWithDeliveryStatus,
+) {
+  const confirmedKey = getMessageKey(confirmedMessage);
+  const alreadyConfirmed = confirmedKey
+    ? messages.some(
+        (message) =>
+          message.id !== pendingId &&
+          message.uuid !== pendingId &&
+          getMessageKey(message) === confirmedKey,
+      )
+    : false;
 
-  function handleVoiceFeature() {
-    toast.message("Voz e vídeo entram na próxima fase do módulo de comunicação.");
+  if (alreadyConfirmed) {
+    return removePendingMessage(messages, pendingId);
   }
 
-  if (selectedThread) {
-    const messages = messagesQuery.data ?? [];
+  let replaced = false;
+  const nextMessages = messages.map((message) => {
+    if (message.id !== pendingId && message.uuid !== pendingId) return message;
+    replaced = true;
+    return { ...confirmedMessage, delivery_status: "sent" as const };
+  });
+
+  return replaced ? nextMessages : appendUniqueMessage(nextMessages, confirmedMessage);
+}
+
+function removePendingMessage(
+  messages: ChatMessageWithDeliveryStatus[],
+  pendingId: string,
+) {
+  return messages.filter((message) => message.id !== pendingId && message.uuid !== pendingId);
+}
+
+function getMessageKey(message: ChatMessageWithDeliveryStatus) {
+  return message.uuid ?? String(message.id ?? "");
+}
+
+function isPendingMessageMatch(
+  pendingMessage: ChatMessageWithDeliveryStatus,
+  incoming: ChatMessageWithDeliveryStatus,
+) {
+  if (pendingMessage.delivery_status !== "pending") return false;
+  if (!pendingMessage.is_me || !incoming.is_me) return false;
+  if (pendingMessage.text.trim() !== incoming.text.trim()) return false;
+
+  const pendingAttachments = pendingMessage.attachments ?? [];
+  const incomingAttachments = incoming.attachments ?? [];
+  if (pendingAttachments.length !== incomingAttachments.length) return false;
+  if (
+    pendingAttachments.some(
+      (attachment, index) =>
+        attachment.original_name !== incomingAttachments[index]?.original_name,
+    )
+  ) {
+    return false;
+  }
+
+  const pendingTime = new Date(pendingMessage.created_at).getTime();
+  const incomingTime = new Date(incoming.created_at).getTime();
+  if (Number.isNaN(pendingTime) || Number.isNaN(incomingTime)) return true;
+  return Math.abs(incomingTime - pendingTime) < 60_000;
+}
+
+function getLocalAttachmentKind(file: File): ChatAttachment["file_kind"] {
+  if (file.type.startsWith("image/")) return "IMAGE";
+  if (file.type.startsWith("video/")) return "VIDEO";
+  if (file.type.startsWith("audio/")) return "AUDIO";
+  if (file.type) return "DOCUMENT";
+  return "OTHER";
+}
+
+function createPendingMessage(
+  pendingId: string,
+  messageText: string,
+  file: File | null,
+  senderLabel: string,
+): ChatMessageWithDeliveryStatus {
+  return {
+    id: pendingId,
+    uuid: pendingId,
+    text: messageText,
+    created_at: new Date().toISOString(),
+    sender_kind: "PERSON",
+    sender_label: senderLabel,
+    sender_avatar_label: buildAvatarLabel(senderLabel),
+    sender_role: "Morador",
+    is_me: true,
+    external_id: pendingId,
+    read_by_others: false,
+    metadata: { source: "access-suite", optimistic: true },
+    attachments: file
+      ? [
+          {
+            uuid: pendingId,
+            file_kind: getLocalAttachmentKind(file),
+            mime_type: file.type || "application/octet-stream",
+            original_name: file.name,
+            file_size_bytes: file.size,
+          },
+        ]
+      : [],
+    delivery_status: "pending",
+  };
+}
+
+function isPortariaSearch(value: string) {
+  return /^(portaria|pwa|atendimento)$/i.test(value.trim());
+}
+
+function getTargetKey(target: ChatTarget) {
+  if (target.type === "PORTARIA") {
+    return `PORTARIA:${target.site_id}`;
+  }
+
+  return `PERSON:${target.site_id}:${target.targetPersonId}`;
+}
+
+function isEventForTarget(event: ChatMessageCreatedEvent, target: ChatTarget) {
+  if (target.type === "PORTARIA") {
+    return (
+      event.conversation.conversation_type === "PORTARIA" &&
+      Number(event.conversation.site_id) === Number(target.site_id)
+    );
+  }
+
+  return (
+    event.conversation.conversation_type === "DIRECT" &&
+    (event.conversation.person_a_id === target.targetPersonId ||
+      event.conversation.person_b_id === target.targetPersonId)
+  );
+}
+
+export default function ChatPage() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const selectedTargetRef = useRef<ChatTarget | null>(null);
+  const lastScrollStateRef = useRef({
+    targetKey: "",
+    messageCount: 0,
+    lastMessageId: "",
+    historyLoading: false,
+  });
+  const lastReadMarkerRef = useRef("");
+  const residentNameRef = useRef("");
+  const { resident, snapshot, connectionState, isAuthenticated } = useSession();
+  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
+  const {
+    socketStatus: callSocketStatus,
+    startPortariaCall,
+  } = useChatCalls();
+  const socketBaseUrl = useMemo(
+    () => resolveSocketBaseUrl(snapshot.apiBaseUrl),
+    [snapshot.apiBaseUrl],
+  );
+
+  const [readyPayload, setReadyPayload] = useState<ChatReadyPayload | null>(null);
+  const [socketStatus, setSocketStatus] = useState<
+    "idle" | "connecting" | "ready" | "error"
+  >("idle");
+  const [socketError, setSocketError] = useState("");
+  const [people, setPeople] = useState<ChatContact[]>([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const [selectedTarget, setSelectedTarget] = useState<ChatTarget | null>(null);
+  const [history, setHistory] = useState<HistoryState>({
+    conversation: null,
+    messages: [],
+  });
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [messageDraft, setMessageDraft] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [sending, setSending] = useState(false);
+  const [search, setSearch] = useState("");
+  const [callConfirmOpen, setCallConfirmOpen] = useState(false);
+
+  const currentPersonId = resident.person_id ?? resident.id;
+  const socketReady = socketStatus === "ready" && Boolean(socketRef.current?.connected);
+  const portariaTarget = createPortariaTarget(resident.site_id, resident.site_name);
+  const showPortariaOption = !search.trim() || isPortariaSearch(search);
+
+  useEffect(() => {
+    selectedTargetRef.current = selectedTarget;
+  }, [selectedTarget]);
+
+  useEffect(() => {
+    residentNameRef.current = resident.name;
+  }, [resident.name]);
+
+  useEffect(() => {
+    if (
+      snapshot.mode !== "backend" ||
+      !isAuthenticated ||
+      !hasChatModule ||
+      !snapshot.token ||
+      !currentPersonId
+    ) {
+      setSocketStatus("idle");
+      setSocketError(
+        hasChatModule
+          ? "Conecte uma sessão backend para usar o chat em tempo real."
+          : "O módulo de chat não está habilitado para este tenant.",
+      );
+      return undefined;
+    }
+
+    setSocketStatus("connecting");
+    setSocketError("");
+    setReadyPayload(null);
+
+    const socket = io(`${socketBaseUrl}/chat-app`, {
+      auth: { token: snapshot.token },
+      transports: ["websocket"],
+      autoConnect: true,
+      timeout: 10_000,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 750,
+      reconnectionDelayMax: 4_000,
+      randomizationFactor: 0.3,
+      forceNew: true,
+    });
+
+    socketRef.current = socket;
+
+    const handleReady = (payload: ChatReadyPayload) => {
+      setReadyPayload(payload);
+      setSocketStatus("ready");
+      setSocketError("");
+    };
+
+    const handleConnectError = (error: Error) => {
+      setSocketStatus("error");
+      setSocketError(error.message || "Falha ao conectar no chat em tempo real.");
+    };
+
+    const handleDisconnect = () => {
+      setSocketStatus("connecting");
+    };
+
+    const handleMessageCreated = (event: ChatMessageCreatedEvent) => {
+      setPeople((current) =>
+        current.map((person) =>
+          person.conversation_uuid === event.conversation_uuid ||
+          event.conversation.person_a_id === person.person_id ||
+          event.conversation.person_b_id === person.person_id
+            ? {
+                ...person,
+                conversation_uuid: event.conversation_uuid,
+                last_message_at: event.message.created_at ?? new Date().toISOString(),
+              }
+            : person,
+        ),
+      );
+
+      setHistory((current) => {
+        const activeTarget = selectedTargetRef.current;
+        if (!activeTarget || !isEventForTarget(event, activeTarget)) return current;
+
+        return {
+          conversation: mapConversation(event.conversation, activeTarget),
+          messages: appendUniqueMessage(
+            current.messages,
+            mapMessage(event.message, residentNameRef.current),
+          ),
+        };
+      });
+    };
+
+    const handleMessageRead = (event: ChatMessageReadEvent) => {
+      if (
+        event.reader_kind === "PERSON" &&
+        Number(event.reader_person_id ?? 0) === Number(currentPersonId)
+      ) {
+        return;
+      }
+
+      setHistory((current) => {
+        const activeConversationUuid = String(
+          current.conversation?.uuid ?? current.conversation?.id ?? "",
+        );
+        if (
+          !activeConversationUuid ||
+          activeConversationUuid !== String(event.conversation_uuid)
+        ) {
+          return current;
+        }
+
+        const readMessage = current.messages.find(
+          (message) =>
+            String(message.uuid ?? message.id) ===
+            String(event.last_read_message_uuid ?? ""),
+        );
+        if (!readMessage) return current;
+
+        const readAt = new Date(readMessage.created_at).getTime();
+        return {
+          ...current,
+          messages: current.messages.map((message) => {
+            if (!message.is_me || message.read_by_others) return message;
+            const messageCreatedAt = new Date(message.created_at).getTime();
+            return messageCreatedAt <= readAt
+              ? { ...message, read_by_others: true }
+              : message;
+          }),
+        };
+      });
+    };
+
+    socket.on("chat:ready", handleReady);
+    socket.on("connect_error", handleConnectError);
+    socket.on("disconnect", handleDisconnect);
+    socket.on("chat:message:created", handleMessageCreated);
+    socket.on("chat:message:read", handleMessageRead);
+
+    return () => {
+      socket.off("chat:ready", handleReady);
+      socket.off("connect_error", handleConnectError);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("chat:message:created", handleMessageCreated);
+      socket.off("chat:message:read", handleMessageRead);
+      socket.removeAllListeners();
+      socket.disconnect();
+      socket.close();
+      if (socketRef.current === socket) socketRef.current = null;
+    };
+  }, [
+    currentPersonId,
+    hasChatModule,
+    isAuthenticated,
+    snapshot.mode,
+    snapshot.token,
+    socketBaseUrl,
+  ]);
+
+  useEffect(() => {
+    if (
+      !hasChatModule ||
+      !socketReady ||
+      !socketRef.current ||
+      isPortariaSearch(search)
+    ) {
+      setPeople([]);
+      setPeopleLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      const requestId = createRequestId("people");
+      setPeopleLoading(true);
+
+      void emitWithResult<ChatPeopleSearchResult>(
+        socketRef.current as Socket,
+        "chat:people:search",
+        "chat:people:search:result",
+        {
+          requestId,
+          search: search.trim() || undefined,
+          limit: 30,
+        },
+      )
+        .then((result) => {
+          if (cancelled) return;
+          setPeople(result.people.map(mapPerson));
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          toast.error(
+            error instanceof Error ? error.message : "Falha ao buscar pessoas.",
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setPeopleLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [hasChatModule, search, socketReady]);
+
+  useEffect(() => {
+    if (!hasChatModule || !selectedTarget) {
+      setHistory({ conversation: null, messages: [] });
+      lastScrollStateRef.current = {
+        targetKey: "",
+        messageCount: 0,
+        lastMessageId: "",
+        historyLoading: false,
+      };
+      return undefined;
+    }
+
+    let cancelled = false;
+    setHistoryLoading(true);
+
+    void loadTargetHistory(selectedTarget)
+      .then((nextHistory) => {
+        if (!cancelled) setHistory(nextHistory);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(
+            error instanceof Error ? error.message : "Falha ao carregar histórico.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasChatModule, selectedTarget, socketReady]);
+
+  useEffect(() => {
+    if (!selectedTarget || historyLoading || !history.conversation) return;
+
+    const latestConfirmedMessage = [...history.messages]
+      .reverse()
+      .find((message) => !String(message.id ?? "").startsWith("pending-"));
+    const latestMessageId = String(
+      latestConfirmedMessage?.uuid ?? latestConfirmedMessage?.id ?? "",
+    ).trim();
+    if (!latestMessageId) return;
+
+    const conversationId = String(
+      history.conversation.uuid ?? history.conversation.id ?? "",
+    ).trim();
+    if (!conversationId) return;
+
+    const marker = `${conversationId}:${latestMessageId}`;
+    if (lastReadMarkerRef.current === marker) return;
+
+    lastReadMarkerRef.current = marker;
+    void markChatConversationRead(
+      snapshot,
+      connectionState,
+      conversationId,
+      latestMessageId,
+    ).catch(() => {
+      if (lastReadMarkerRef.current === marker) {
+        lastReadMarkerRef.current = "";
+      }
+    });
+  }, [
+    connectionState,
+    history.conversation,
+    history.messages,
+    historyLoading,
+    selectedTarget,
+    snapshot,
+  ]);
+
+  useEffect(() => {
+    if (!selectedTarget) return undefined;
+
+    const targetKey = getTargetKey(selectedTarget);
+    const lastMessage = history.messages[history.messages.length - 1];
+    const lastMessageId = lastMessage?.id ?? lastMessage?.uuid ?? "";
+    const previous = lastScrollStateRef.current;
+    const targetChanged = previous.targetKey !== targetKey;
+    const messageChanged =
+      previous.messageCount !== history.messages.length ||
+      previous.lastMessageId !== lastMessageId;
+    const canAnimate =
+      !targetChanged &&
+      !previous.historyLoading &&
+      !historyLoading &&
+      previous.messageCount > 0 &&
+      messageChanged;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const behavior: ScrollBehavior = canAnimate && !reduceMotion ? "smooth" : "auto";
+
+    lastScrollStateRef.current = {
+      targetKey,
+      messageCount: history.messages.length,
+      lastMessageId,
+      historyLoading,
+    };
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      const container = messagesContainerRef.current;
+      if (!container) return;
+
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior,
+      });
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [history.messages, historyLoading, selectedTarget]);
+
+  async function loadTargetHistory(target: ChatTarget): Promise<HistoryState> {
+    if (target.type === "PERSON") {
+      if (!socketReady || !socketRef.current) {
+        throw new Error("Chat em tempo real ainda não está conectado.");
+      }
+
+      const result = await emitWithResult<ChatHistoryResult>(
+        socketRef.current,
+        "chat:direct:history",
+        "chat:direct:history:result",
+        {
+          requestId: createRequestId("history"),
+          targetPersonId: target.targetPersonId,
+          site_id: target.site_id,
+        },
+      );
+
+      return {
+        conversation: result.conversation
+          ? mapConversation(result.conversation, target)
+          : null,
+        messages: result.messages.map((message) =>
+          mapMessage(message, residentNameRef.current),
+        ),
+      };
+    }
+
+    if (socketReady && socketRef.current) {
+      try {
+        const result = await emitWithResult<ChatHistoryResult>(
+          socketRef.current,
+          "chat:portaria:history",
+          "chat:portaria:history:result",
+          {
+            requestId: createRequestId("portaria-history"),
+            site_id: target.site_id,
+          },
+        );
+
+        return {
+          conversation: result.conversation
+            ? mapConversation(result.conversation, target)
+            : null,
+          messages: result.messages.map((message) =>
+            mapMessage(message, residentNameRef.current),
+          ),
+        };
+      } catch {
+        // HTTP fallback while chat:portaria:* events are not available.
+      }
+    }
+
+    const result = await listChatPortariaMessages(
+      snapshot,
+      connectionState,
+      resident,
+      target.site_id,
+    );
+
+    return {
+      conversation: result.conversation,
+      messages: result.messages,
+    };
+  }
+
+  async function buildAttachmentPayload(file: File | null = selectedFile) {
+    return file
+      ? {
+          buffer: await file.arrayBuffer(),
+          mimetype: file.type || "application/octet-stream",
+          originalname: file.name,
+          size: file.size,
+        }
+      : undefined;
+  }
+
+  async function handleSendMessage() {
+    if (!hasChatModule) {
+      toast.error("O módulo de chat não está habilitado para este tenant.");
+      return;
+    }
+
+    if (!selectedTarget) {
+      toast.error("Selecione um destino do chat.");
+      return;
+    }
+
+    const normalizedMessage = messageDraft.trim();
+    if (!normalizedMessage && !selectedFile) {
+      toast.error("Informe uma mensagem ou anexe um arquivo.");
+      return;
+    }
+
+    const fileToSend = selectedFile;
+    const pendingId = createRequestId("pending");
+    const pendingMessage = createPendingMessage(
+      pendingId,
+      normalizedMessage,
+      fileToSend,
+      residentNameRef.current,
+    );
+
+    setMessageDraft("");
+    setSelectedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setHistory((current) => ({
+      ...current,
+      messages: appendUniqueMessage(current.messages, pendingMessage),
+    }));
+    setSending(true);
+
+    try {
+      const attachment = await buildAttachmentPayload(fileToSend);
+      const result =
+        selectedTarget.type === "PERSON"
+          ? await sendPersonMessage(selectedTarget, normalizedMessage, attachment)
+          : await sendPortariaMessage(selectedTarget, normalizedMessage, attachment);
+
+      setHistory((current) => ({
+        conversation: mapConversation(result.conversation, selectedTarget),
+        messages: replacePendingMessage(
+          current.messages,
+          pendingId,
+          mapMessage(result.message, residentNameRef.current),
+        ),
+      }));
+    } catch (error) {
+      setHistory((current) => ({
+        ...current,
+        messages: removePendingMessage(current.messages, pendingId),
+      }));
+      toast.error(error instanceof Error ? error.message : "Falha ao enviar mensagem.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function sendPersonMessage(
+    target: Extract<ChatTarget, { type: "PERSON" }>,
+    messageText: string,
+    attachment?: Awaited<ReturnType<typeof buildAttachmentPayload>>,
+  ) {
+    if (!socketReady || !socketRef.current) {
+      throw new Error("Chat em tempo real ainda não está conectado.");
+    }
+
+    const result = await emitWithResult<ChatMessageSent>(
+      socketRef.current,
+      "chat:direct:message:send",
+      "chat:direct:message:sent",
+      {
+        requestId: createRequestId("send"),
+        targetPersonId: target.targetPersonId,
+        site_id: target.site_id,
+        message_text: messageText || undefined,
+        metadata: { source: "access-suite" },
+        attachment,
+      },
+    );
+
+    setPeople((current) =>
+      current.map((person) =>
+        person.person_id === target.targetPersonId && person.site_id === target.site_id
+          ? {
+              ...person,
+              conversation_uuid: result.conversation.uuid,
+              last_message_at: result.message.created_at ?? new Date().toISOString(),
+            }
+          : person,
+      ),
+    );
+
+    return result;
+  }
+
+  async function sendPortariaMessage(
+    target: Extract<ChatTarget, { type: "PORTARIA" }>,
+    messageText: string,
+    attachment?: Awaited<ReturnType<typeof buildAttachmentPayload>>,
+  ) {
+    if (socketReady && socketRef.current) {
+      try {
+        return await emitWithResult<ChatMessageSent>(
+          socketRef.current,
+          "chat:portaria:message:send",
+          "chat:portaria:message:sent",
+          {
+            requestId: createRequestId("portaria-send"),
+            site_id: target.site_id,
+            message_text: messageText || undefined,
+            metadata: { source: "access-suite" },
+            attachment,
+          },
+        );
+      } catch {
+        // HTTP fallback while chat:portaria:* events are not available.
+      }
+    }
+
+    const message = await sendPortariaChatMessage(
+      snapshot,
+      connectionState,
+      resident,
+      target.site_id,
+      messageText,
+      selectedFile,
+    );
+    const refreshed = await listChatPortariaMessages(
+      snapshot,
+      connectionState,
+      resident,
+      target.site_id,
+    );
+    const fallbackConversation = refreshed.conversation ?? history.conversation;
+
+    return {
+      requestId: createRequestId("portaria-http"),
+      conversation: {
+        uuid: String(fallbackConversation?.uuid ?? fallbackConversation?.id ?? "portaria"),
+        conversation_type: "PORTARIA" as const,
+        site_id: target.site_id,
+        person_a_id: currentPersonId,
+        person_b_id: null,
+        status: fallbackConversation?.status === "CLOSED" ? "CLOSED" : "OPEN",
+      },
+      message: {
+        uuid: String(message?.uuid ?? message?.id ?? createRequestId("message")),
+        sender_kind: message?.sender_kind ?? "PERSON",
+        sender_label: message?.sender_label ?? resident.name,
+        message_text: message?.text ?? messageText,
+        created_at: message?.created_at ?? new Date().toISOString(),
+        read_by_others: Boolean(message?.read_by_others),
+        attachments: message?.attachments ?? [],
+      },
+    };
+  }
+
+  async function handleDownloadAttachment(attachment: {
+    uuid: string;
+    original_name: string;
+  }) {
+    if (attachment.uuid.startsWith("pending-")) return;
+
+    try {
+      const blob = await downloadChatAttachment(snapshot, attachment.uuid);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = attachment.original_name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Falha ao baixar o anexo.",
+      );
+    }
+  }
+
+  function resolvePortariaConversationUuid() {
+    const conversationUuid = history.conversation?.uuid ?? history.conversation?.id;
+    return typeof conversationUuid === "string" ? conversationUuid : "";
+  }
+
+  async function handleStartPortariaCall() {
+    if (!selectedTarget || selectedTarget.type !== "PORTARIA") {
+      toast.message("Chamadas de voz estão disponíveis para a Portaria.");
+      return;
+    }
+
+    const conversationUuid = resolvePortariaConversationUuid();
+    if (!conversationUuid) {
+      toast.error("Abra uma conversa com a Portaria antes de ligar.");
+      return;
+    }
+
+    await startPortariaCall(conversationUuid);
+    setCallConfirmOpen(false);
+  }
+
+  if (selectedTarget) {
+    const canReply = history.conversation?.can_reply ?? true;
+    const targetName = getTargetName(selectedTarget);
+    const targetSiteName = getTargetSiteName(selectedTarget);
 
     return (
-      <div className="flex h-screen max-w-md flex-col">
-        <div className="bg-primary px-4 pb-4 pt-8 text-primary-foreground">
+      <div className="flex h-full min-h-0 max-w-md flex-col overflow-hidden">
+        <div className="sticky top-0 z-20 shrink-0 bg-primary px-4 pb-4 pt-8 text-primary-foreground">
           <div className="flex items-start gap-3">
             <Button
               variant="ghost"
               size="icon"
               className="rounded-full text-primary-foreground hover:bg-primary-foreground/10"
-              onClick={() => setSelectedChatId(null)}
+              onClick={() => setSelectedTarget(null)}
             >
-              <span className="text-lg leading-none">‹</span>
+              <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-semibold">{selectedThread.title}</h1>
-              <p className="mt-1 text-sm text-primary-foreground/70">
-                {selectedThread.counterpart_unit_label ??
-                  (selectedThread.type === "PORTARIA"
-                    ? "Canal direto com a portaria"
-                    : "Conversa direta")}
+              <h1 className="truncate text-lg font-semibold">{targetName}</h1>
+              <p className="mt-1 truncate text-sm text-primary-foreground/70">
+                {selectedTarget.type === "PORTARIA"
+                  ? "Atendimento da Portaria"
+                  : targetSiteName ?? "Conversa direta"}
               </p>
             </div>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-full text-primary-foreground hover:bg-primary-foreground/10"
-                onClick={handleVoiceFeature}
-              >
-                <Phone className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-full text-primary-foreground hover:bg-primary-foreground/10"
-                onClick={handleVoiceFeature}
-              >
-                <Video className="h-4 w-4" />
-              </Button>
-            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="shrink-0 rounded-full text-primary-foreground hover:bg-primary-foreground/10"
+              aria-label="Chamada de voz"
+              title="Chamada de voz"
+              onClick={() => {
+                if (selectedTarget.type !== "PORTARIA") {
+                  toast.message("Chamadas de voz estão disponíveis para a Portaria.");
+                  return;
+                }
+                if (callSocketStatus !== "ready") {
+                  toast.error("Chamada indisponível: socket de voz desconectado.");
+                  return;
+                }
+                if (!resolvePortariaConversationUuid()) {
+                  toast.error("Abra uma conversa com a Portaria antes de ligar.");
+                  return;
+                }
+                setCallConfirmOpen(true);
+              }}
+            >
+              <Phone className="h-4 w-4" />
+            </Button>
+            <Badge variant={socketReady ? "secondary" : "outline"}>
+              {selectedTarget.type === "PORTARIA"
+                ? "Portaria"
+                : socketReady
+                  ? "Online"
+                  : "Conectando"}
+            </Badge>
           </div>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto bg-muted/50 px-4 py-4">
-          {selectedThread.requires_my_approval ? (
-            <div className="rounded-[22px] border border-warning/25 bg-warning/10 p-4">
-              <p className="text-sm font-semibold text-foreground">
-                Primeira conversa aguardando sua aprovação
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Se você rejeitar, esta conversa será encerrada. Se aprovar, o chat
-                permanece aberto para novas mensagens.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  variant="accent"
-                  className="rounded-full"
-                  disabled={approveMutation.isPending}
-                  onClick={() => approveMutation.mutate(selectedThread.id)}
-                >
-                  Aprovar conversa
-                </Button>
-                <Button
-                  variant="outline"
-                  className="rounded-full"
-                  disabled={rejectMutation.isPending}
-                  onClick={() => rejectMutation.mutate(selectedThread.id)}
-                >
-                  Rejeitar
-                </Button>
-              </div>
-            </div>
-          ) : null}
+        <Dialog open={callConfirmOpen} onOpenChange={setCallConfirmOpen}>
+          <DialogContent className="max-w-[calc(100%-2rem)] rounded-2xl sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Chamada de voz</DialogTitle>
+              <DialogDescription>
+                Deseja ligar para a Portaria usando esta conversa?
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:space-x-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCallConfirmOpen(false)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void handleStartPortariaCall()}
+              >
+                Ligar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-          {selectedThread.pending_other_approval ? (
-            <div className="rounded-[22px] border border-secondary/40 bg-secondary/30 p-4 text-sm text-muted-foreground">
-              Aguardando o destinatário liberar a conversa. Novas mensagens ficam
-              bloqueadas até a aprovação.
-            </div>
-          ) : null}
-
-          {selectedThread.blocked_by_me || selectedThread.status === "CLOSED" ? (
-            <div className="rounded-[22px] border border-destructive/25 bg-destructive/10 p-4">
-              <p className="text-sm font-semibold text-foreground">
-                Conversa encerrada
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Esta conversa foi encerrada ou bloqueada. O envio de novas mensagens
-                foi desabilitado.
-              </p>
-            </div>
-          ) : null}
-
-          {messages.map((chatMessage) => (
+        <div
+          ref={messagesContainerRef}
+          className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-muted/50 px-4 py-4"
+        >
+          {history.messages.map((chatMessage) => (
             <motion.div
               key={chatMessage.id}
               initial={{ opacity: 0, y: 6 }}
@@ -296,58 +1241,111 @@ export default function ChatPage() {
                     {chatMessage.sender_label}
                   </p>
                 ) : null}
-                <p>{chatMessage.text}</p>
+                {chatMessage.text ? (
+                  <p className="whitespace-pre-wrap">{chatMessage.text}</p>
+                ) : null}
+                {chatMessage.attachments?.length ? (
+                  <div className="mt-2 space-y-2">
+                    {chatMessage.attachments.map((attachment) => (
+                      <button
+                        key={attachment.uuid}
+                        className={`flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-xs ${
+                          chatMessage.is_me
+                            ? "bg-primary-foreground/10 text-primary-foreground"
+                            : "bg-muted text-foreground"
+                        }`}
+                        disabled={attachment.uuid.startsWith("pending-")}
+                        onClick={() => void handleDownloadAttachment(attachment)}
+                      >
+                        <Download className="h-3.5 w-3.5 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate text-left">
+                          {attachment.original_name}
+                        </span>
+                        <span className="shrink-0 opacity-70">
+                          {formatBytes(attachment.file_size_bytes)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <p
-                  className={`mt-2 text-[10px] ${
+                  className={`mt-2 flex items-center justify-end gap-1 text-[10px] ${
                     chatMessage.is_me
                       ? "text-primary-foreground/60"
                       : "text-muted-foreground"
                   }`}
                 >
-                  {formatDateTime(chatMessage.created_at)}
+                  <span>{formatDateTime(chatMessage.created_at)}</span>
+                  {chatMessage.is_me ? (
+                    chatMessage.delivery_status === "pending" ? (
+                      <Clock className="h-3 w-3" aria-label="Mensagem aguardando envio" />
+                    ) : chatMessage.read_by_others ? (
+                      <CheckCheck className="h-3 w-3" aria-label="Mensagem visualizada" />
+                    ) : (
+                      <Check className="h-3 w-3" aria-label="Mensagem enviada" />
+                    )
+                  ) : null}
                 </p>
               </div>
             </motion.div>
           ))}
+
+          {!historyLoading && history.messages.length === 0 ? (
+            <div className="rounded-[24px] border border-border bg-card p-4 text-sm text-muted-foreground shadow-sm">
+              Nenhuma mensagem neste atendimento.
+            </div>
+          ) : null}
         </div>
 
-        <div className="safe-bottom space-y-3 border-t border-border bg-card px-4 py-3">
-          {selectedThread.type === "DIRECT" ? (
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">
-                Conversa direta entre condôminos
-              </p>
+        <div className="shrink-0 space-y-3 border-t border-border bg-card px-4 pb-0 pt-3">
+          {selectedFile ? (
+            <div className="flex items-center gap-2 rounded-2xl bg-muted px-3 py-2 text-xs text-muted-foreground">
+              <Paperclip className="h-4 w-4" />
+              <span className="min-w-0 flex-1 truncate">{selectedFile.name}</span>
               <Button
                 variant="ghost"
-                size="sm"
-                className="rounded-full text-destructive hover:text-destructive"
-                disabled={blockMutation.isPending}
-                onClick={() => blockMutation.mutate(selectedThread.id)}
+                size="icon"
+                className="h-7 w-7 rounded-full"
+                onClick={() => {
+                  setSelectedFile(null);
+                  if (fileInputRef.current) fileInputRef.current.value = "";
+                }}
               >
-                <ShieldBan className="mr-2 h-4 w-4" />
-                Bloquear
+                <X className="h-4 w-4" />
               </Button>
             </div>
           ) : null}
-
           <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+            />
+            <Button
+              variant="outline"
+              size="icon"
+              className="rounded-full"
+              disabled={!canReply || sending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
             <Input
               className="rounded-full border-0 bg-muted"
               value={messageDraft}
               onChange={(event) => setMessageDraft(event.target.value)}
-              disabled={!selectedThread.can_reply || sendMessageMutation.isPending}
-              placeholder={
-                selectedThread.can_reply
-                  ? "Mensagem..."
-                  : "Envio indisponível nesta conversa"
-              }
+              disabled={!canReply || sending}
+              placeholder="Mensagem..."
             />
             <Button
               variant="accent"
               size="icon"
               className="rounded-full"
-              disabled={!selectedThread.can_reply || sendMessageMutation.isPending}
-              onClick={() => sendMessageMutation.mutate()}
+              disabled={
+                !canReply || sending || (!messageDraft.trim() && !selectedFile)
+              }
+              onClick={() => void handleSendMessage()}
             >
               <Send className="h-4 w-4" />
             </Button>
@@ -357,29 +1355,18 @@ export default function ChatPage() {
     );
   }
 
-  if (settingsQuery.isLoading) {
-    return (
-      <div className="space-y-4 px-4 pb-6 pt-8">
-        <PageHeader
-          title="Chat condominial"
-          subtitle="Carregando o canal de comunicação do condomínio."
-          backTo="/"
-        />
-      </div>
-    );
-  }
+  const isBackendReady = snapshot.mode === "backend" && isAuthenticated;
 
-  if (!settingsQuery.data?.enabled) {
+  if (!hasChatModule) {
     return (
       <div className="space-y-4 px-4 pb-6 pt-8">
         <PageHeader
-          title="Chat condominial"
-          subtitle="O chat está desabilitado para o seu contexto residencial."
+          title="Chat"
+          subtitle="O módulo de chat não está habilitado para este tenant."
           backTo="/"
         />
-        <div className="rounded-[24px] border border-border bg-card p-4 text-sm text-muted-foreground shadow-sm">
-          Quando a gestão habilitar o módulo de chat no condomínio, esta área volta
-          a aparecer automaticamente.
+        <div className="rounded-[22px] border border-border bg-card px-4 py-4 text-sm text-muted-foreground shadow-sm">
+          A liberação deve ser feita pelo admin do tenant.
         </div>
       </div>
     );
@@ -388,123 +1375,48 @@ export default function ChatPage() {
   return (
     <div className="space-y-4 px-4 pb-6 pt-8">
       <PageHeader
-        title="Chat condominial"
-        subtitle="Portaria, síndico e moradores em uma camada de comunicação por contexto."
+        title="Chat"
+        subtitle="Abra atendimento com a Portaria ou busque uma pessoa."
         backTo="/"
       />
 
-      <div className="grid grid-cols-1 gap-3">
-        {settingsQuery.data.allow_portaria_chat ? (
-          <button
-            className="flex items-center justify-between rounded-[24px] border border-border bg-card px-4 py-4 text-left shadow-sm"
-            onClick={() => createThreadMutation.mutate({ type: "PORTARIA" })}
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                <MessageCircle className="h-5 w-5" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-foreground">
-                  Falar com a portaria
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Abra ou continue o canal direto com a operação.
-                </p>
-              </div>
-            </div>
-            <Badge variant="secondary">Portaria</Badge>
-          </button>
-        ) : null}
-
-        {settingsQuery.data.allow_direct_messages ? (
-          <button
-            className="flex items-center justify-between rounded-[24px] border border-border bg-card px-4 py-4 text-left shadow-sm"
-            onClick={() => setContactPickerOpen((current) => !current)}
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary text-secondary-foreground">
-                <UserPlus className="h-5 w-5" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-foreground">
-                  Nova conversa entre condôminos
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  A primeira mensagem pode exigir aprovação do destinatário.
-                </p>
-              </div>
-            </div>
-            <Badge variant="outline">
-              {contacts.length} contato(s)
-            </Badge>
-          </button>
-        ) : null}
+      <div className="flex items-center gap-2 rounded-[22px] border border-border bg-card px-4 py-3 text-sm text-muted-foreground shadow-sm">
+        {socketReady ? (
+          <Wifi className="h-4 w-4 text-primary" />
+        ) : (
+          <WifiOff className="h-4 w-4 text-muted-foreground" />
+        )}
+        <span className="min-w-0 flex-1 truncate">
+          {socketReady
+            ? `Chat conectado${readyPayload ? ` como pessoa ${readyPayload.person_id}` : ""}.`
+            : isBackendReady
+              ? socketError || "Conectando ao chat em tempo real."
+              : "Entre com uma sessão backend para usar o chat."}
+        </span>
       </div>
 
-      {contactPickerOpen ? (
-        <div className="space-y-3 rounded-[24px] border border-border bg-card p-4 shadow-sm">
-          <p className="text-sm font-semibold text-foreground">Iniciar conversa direta</p>
-          {contacts.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nenhum contato disponível para conversa direta neste momento.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {contacts.map((contact) => (
-                <button
-                  key={contact.person_id}
-                  className={`flex w-full items-center gap-3 rounded-[18px] border px-3 py-3 text-left transition-colors ${
-                    selectedContactId === contact.person_id
-                      ? "border-primary bg-primary/5"
-                      : "border-border bg-muted/30"
-                  }`}
-                  onClick={() => setSelectedContactId(contact.person_id)}
-                >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-secondary text-xs font-semibold text-secondary-foreground">
-                    {contact.avatar_label}
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">{contact.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {contact.unit_label ?? "Sem unidade informada"}
-                    </p>
-                  </div>
-                </button>
-              ))}
+      {showPortariaOption ? (
+        <div className="space-y-2">
+          <p className="px-1 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+            Atendimento
+          </p>
+          <button
+            className="flex w-full items-center gap-3 rounded-[22px] border border-border bg-card p-3 text-left shadow-sm"
+            onClick={() => setSelectedTarget(portariaTarget)}
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <Headphones className="h-5 w-5" />
             </div>
-          )}
-
-          {selectedContact ? (
-            <div className="space-y-3 rounded-[20px] border border-border bg-muted/40 p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Primeira mensagem para {selectedContact.name}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-foreground">
+                Portaria
               </p>
-              <Textarea
-                rows={3}
-                placeholder="Escreva a mensagem inicial da conversa."
-                value={contactMessageDraft}
-                onChange={(event) => setContactMessageDraft(event.target.value)}
-              />
-              <div className="flex justify-end">
-                <Button
-                  variant="accent"
-                  className="rounded-full"
-                  disabled={
-                    createThreadMutation.isPending || contactMessageDraft.trim().length === 0
-                  }
-                  onClick={() =>
-                    createThreadMutation.mutate({
-                      type: "DIRECT",
-                      recipient_person_id: selectedContact.person_id,
-                      message_text: contactMessageDraft.trim(),
-                    })
-                  }
-                >
-                  Enviar pedido de conversa
-                </Button>
-              </div>
+              <p className="mt-1 truncate text-xs text-muted-foreground">
+                PWA Security Vision
+              </p>
             </div>
-          ) : null}
+            <Badge variant="secondary">Atendimento</Badge>
+          </button>
         </div>
       ) : null}
 
@@ -514,67 +1426,61 @@ export default function ChatPage() {
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           className="rounded-full border-0 bg-muted pl-10"
-          placeholder="Buscar conversa..."
+          disabled={!socketReady}
+          placeholder="Buscar pessoa..."
         />
       </div>
 
       <div className="space-y-2">
-        {filteredThreads.map((thread, index) => (
+        {people.map((person, index) => (
           <motion.button
-            key={thread.id}
+            key={`${person.person_id}-${person.site_id ?? "site"}`}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.03 }}
             className="flex w-full items-center gap-3 rounded-[22px] border border-border bg-card p-3 text-left shadow-sm"
-            onClick={() => setSelectedChatId(thread.id)}
+            onClick={() => setSelectedTarget(createPersonTarget(person))}
           >
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary text-sm font-semibold text-secondary-foreground">
-              {thread.counterpart_avatar_label}
+              {person.avatar_label}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
                 <p className="truncate text-sm font-semibold text-foreground">
-                  {thread.title}
+                  {person.name}
                 </p>
                 <span className="text-[11px] text-muted-foreground">
-                  {formatDateTime(thread.last_message_at)}
+                  {formatDateTime(person.last_message_at)}
                 </span>
               </div>
-              <div className="mt-1 flex items-center justify-between gap-2">
-                <p className="truncate text-xs text-muted-foreground">
-                  {thread.last_message_preview || "Sem mensagens ainda."}
-                </p>
-                {thread.requires_my_approval ? (
-                  <Badge variant="warning">Aprovação</Badge>
-                ) : thread.unread_count > 0 ? (
-                  <Badge variant="warning">{thread.unread_count}</Badge>
-                ) : thread.pending_other_approval ? (
-                  <Badge variant="secondary">Pendente</Badge>
-                ) : null}
-              </div>
+              <p className="mt-1 truncate text-xs text-muted-foreground">
+                {person.site_name ?? person.unit_label ?? "Pessoa disponível"}
+              </p>
             </div>
+            {person.conversation_uuid ? (
+              <Badge variant="secondary">Aberta</Badge>
+            ) : null}
           </motion.button>
         ))}
 
-        {!threadsQuery.isLoading && filteredThreads.length === 0 ? (
+        {!peopleLoading &&
+        socketReady &&
+        !showPortariaOption &&
+        people.length === 0 ? (
           <div className="rounded-[24px] border border-border bg-card p-4 text-sm text-muted-foreground shadow-sm">
-            Nenhuma conversa disponível para este contexto.
+            Nenhuma pessoa disponível para conversa neste contexto.
           </div>
         ) : null}
 
-        {settingsQuery.data.allow_direct_messages &&
-        !settingsQuery.data.allow_portaria_chat &&
-        filteredThreads.length === 0 ? (
-          <div className="rounded-[24px] border border-warning/20 bg-warning/10 p-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 text-warning" />
-              <p className="text-sm text-muted-foreground">
-                O chat direto entre condôminos está ativo, mas o canal com a portaria
-                está desabilitado para este site.
-              </p>
-            </div>
+        <div className="rounded-[24px] border border-border bg-card p-4 text-sm text-muted-foreground shadow-sm">
+          <div className="flex items-start gap-3">
+            <MessageCircle className="mt-0.5 h-4 w-4 text-primary" />
+            <p>
+              Pessoas usam WebSocket direto. Portaria usa eventos próprios quando
+              disponíveis e HTTP autenticado como fallback temporário.
+            </p>
           </div>
-        ) : null}
+        </div>
       </div>
     </div>
   );

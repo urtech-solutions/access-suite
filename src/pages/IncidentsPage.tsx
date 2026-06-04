@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { motion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Navigate } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowLeft,
   AudioLines,
+  Camera,
   CheckCircle2,
   Clock3,
   ImagePlus,
@@ -15,6 +17,7 @@ import {
   ShieldPlus,
   UserPlus,
   Video,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -43,10 +46,12 @@ import {
   createIncident,
   getIncident,
   getIncidentSettings,
+  INCIDENTS_MODULE_KEY,
   listIncidentParticipantOptions,
   listIncidents,
   normalizeApiBaseUrl,
   sendIncidentMessage,
+  sessionHasModule,
 } from "@/services/mobile-app.service";
 import type {
   IncidentAttachment,
@@ -96,32 +101,76 @@ function formatDateTime(value?: string | null) {
 }
 
 function resolveMediaUrl(url?: string | null, apiBaseUrl?: string) {
-  if (!url) return undefined;
-  if (/^blob:|^data:|^https?:\/\//i.test(url)) {
-    return url;
+  const value = String(url ?? "").trim();
+  if (!value) return undefined;
+  if (/^blob:|^data:|^https?:\/\//i.test(value)) {
+    return value;
   }
 
   const base = normalizeApiBaseUrl(apiBaseUrl).replace(/\/api$/, "");
-  return `${base}${url}`;
+  const path = value.startsWith("/") ? value : `/${value}`;
+  return `${base}${path}`;
 }
 
 function AttachmentPreview({
   attachment,
   apiBaseUrl,
+  token,
 }: {
   attachment?: IncidentAttachment | null;
   apiBaseUrl: string;
+  token?: string | null;
 }) {
   const src = resolveMediaUrl(attachment?.url, apiBaseUrl);
+  const [blobSrc, setBlobSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!src || attachment?.kind !== "IMAGE" || /^(blob|data):/i.test(src)) {
+      setBlobSrc(null);
+      return undefined;
+    }
+
+    let objectUrl: string | null = null;
+    const controller = new AbortController();
+
+    fetch(src, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Falha ao carregar imagem do incidente.");
+        }
+        return response.blob();
+      })
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        setBlobSrc(objectUrl);
+      })
+      .catch(() => {
+        setBlobSrc(null);
+      });
+
+    return () => {
+      controller.abort();
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [attachment?.kind, src, token]);
+
   if (!attachment?.kind || !src) return null;
 
   if (attachment.kind === "IMAGE") {
+    const imageSrc = blobSrc ?? src;
     return (
-      <img
-        src={src}
-        alt={attachment.name ?? "Anexo do incidente"}
-        className="mt-3 h-48 w-full rounded-[22px] object-cover"
-      />
+      <a href={imageSrc} target="_blank" rel="noreferrer" className="mt-3 block">
+        <img
+          src={imageSrc}
+          alt={attachment.name ?? "Anexo do incidente"}
+          className="h-48 w-full rounded-[22px] object-cover"
+        />
+      </a>
     );
   }
 
@@ -178,6 +227,16 @@ function AttachmentChip({
 }
 
 export default function IncidentsPage() {
+  const { snapshot } = useSession();
+
+  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <IncidentsContent />;
+}
+
+function IncidentsContent() {
   const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
   const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null);
@@ -191,6 +250,7 @@ export default function IncidentsPage() {
   const [createDescription, setCreateDescription] = useState("");
   const [createTopicId, setCreateTopicId] = useState("");
   const [createRequesterPersonId, setCreateRequesterPersonId] = useState("");
+  const [createAttachment, setCreateAttachment] = useState<File | null>(null);
 
   const settingsQuery = useQuery({
     queryKey: ["incident-settings", resident.site_id, snapshot.mode, connectionState],
@@ -297,6 +357,7 @@ export default function IncidentsPage() {
     setCreateDescription("");
     setCreateTopicId("");
     setCreateRequesterPersonId("");
+    setCreateAttachment(null);
   }
 
   function openCreateDialog() {
@@ -305,6 +366,16 @@ export default function IncidentsPage() {
       current || (residentPersonId ? String(residentPersonId) : ""),
     );
     setCreateDialogOpen(true);
+  }
+
+  function handleMessagePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    setMessageAttachment(event.currentTarget.files?.[0] ?? null);
+    event.currentTarget.value = "";
+  }
+
+  function handleCreatePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    setCreateAttachment(event.currentTarget.files?.[0] ?? null);
+    event.currentTarget.value = "";
   }
 
   const createIncidentMutation = useMutation({
@@ -323,6 +394,7 @@ export default function IncidentsPage() {
         title: createTitle,
         description: createDescription,
         topic_id: topicId,
+        attachment: createAttachment,
         requester: selectedCreateRequester ?? {
           id: resolvedCreateRequesterPersonId,
           name: resident.name,
@@ -578,6 +650,7 @@ export default function IncidentsPage() {
                 <AttachmentPreview
                   attachment={message.attachment}
                   apiBaseUrl={snapshot.apiBaseUrl}
+                  token={snapshot.token}
                 />
               </motion.div>
             ))}
@@ -611,18 +684,46 @@ export default function IncidentsPage() {
               placeholder="Escreva o andamento, orientação ou contexto adicional."
             />
 
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[22px] border border-dashed border-border bg-muted/30 px-4 py-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <ShieldPlus className="h-4 w-4" />
-                <span>{messageAttachment ? messageAttachment.name : "Anexar imagem, vídeo ou áudio"}</span>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-[22px] border border-dashed border-border bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
+                <ImagePlus className="h-4 w-4" />
+                <span>Galeria</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleMessagePhotoChange}
+                />
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-[22px] border border-dashed border-border bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
+                <Camera className="h-4 w-4" />
+                <span>Câmera</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={handleMessagePhotoChange}
+                />
+              </label>
+            </div>
+
+            {messageAttachment ? (
+              <div className="flex items-center gap-2 rounded-[18px] border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                <ShieldPlus className="h-3.5 w-3.5" />
+                <span className="min-w-0 truncate">{messageAttachment.name}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0 rounded-full"
+                  onClick={() => setMessageAttachment(null)}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
               </div>
-              <input
-                type="file"
-                accept="image/*,video/*,audio/*"
-                className="hidden"
-                onChange={(event) => setMessageAttachment(event.target.files?.[0] ?? null)}
-              />
-            </label>
+            ) : null}
 
             <Button
               className="w-full rounded-[20px]"
@@ -689,11 +790,11 @@ export default function IncidentsPage() {
   }
 
   return (
-    <div className="space-y-6 px-4 pb-6 pt-8">
+    <div className="space-y-6 px-4 pb-6 pt-0">
       <PageHeader
         title="Incidentes"
-        subtitle="Fila operacional do site ativo, com timeline, evidências, participantes e histórico de tratamento."
         backTo="/"
+        className="pb-4 pt-[calc(1rem+env(safe-area-inset-top,0px))]"
         action={
           <Button
             size="sm"
@@ -718,10 +819,10 @@ export default function IncidentsPage() {
 
             <div className="relative z-10">
               <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-[18px] bg-white/10 text-white">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/10 text-white">
                   <AlertTriangle className="h-5 w-5" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/50">
                     Central de incidentes
                   </p>
@@ -734,19 +835,16 @@ export default function IncidentsPage() {
               <div className="mt-5 grid grid-cols-3 gap-3">
                 {stats.map((item) => (
                   <div key={item.label} className="rounded-[22px] border border-white/10 bg-white/5 p-3">
-                    <p className={`text-2xl font-bold ${item.tone}`}>{item.value}</p>
-                    <p className="mt-1 text-[11px] uppercase tracking-[0.22em] text-white/45">
+                    <p className={`text-xl font-bold leading-none ${item.tone}`}>
+                      {item.value}
+                    </p>
+                    <p className="mt-1.5 text-[9px] uppercase leading-tight tracking-[0.12em] text-white/45">
                       {item.label}
                     </p>
                   </div>
                 ))}
               </div>
             </div>
-          </div>
-
-          <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
-            <Label className="mb-2 block">Site ativo</Label>
-            <Input readOnly value={activeSiteName} className="bg-muted/45" />
           </div>
 
           <div className="grid grid-cols-[1fr_1fr] gap-3">
@@ -989,6 +1087,50 @@ export default function IncidentsPage() {
                 onChange={(event) => setCreateDescription(event.target.value)}
                 placeholder="Descreva o que aconteceu e onde o problema foi percebido."
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Imagem</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-[22px] border border-dashed border-border bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
+                  <ImagePlus className="h-4 w-4" />
+                  <span>Galeria</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleCreatePhotoChange}
+                  />
+                </label>
+
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-[22px] border border-dashed border-border bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
+                  <Camera className="h-4 w-4" />
+                  <span>Câmera</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={handleCreatePhotoChange}
+                  />
+                </label>
+              </div>
+
+              {createAttachment ? (
+                <div className="flex items-center gap-2 rounded-[18px] border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  <ImagePlus className="h-3.5 w-3.5" />
+                  <span className="min-w-0 truncate">{createAttachment.name}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 rounded-full"
+                    onClick={() => setCreateAttachment(null)}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ) : null}
             </div>
 
             <Button

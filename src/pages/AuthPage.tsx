@@ -2,9 +2,11 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
+  AlertCircle,
   ChevronLeft,
   KeyRound,
   Network,
+  RefreshCw,
   Settings2,
   ShieldCheck,
   Sparkles,
@@ -50,9 +52,23 @@ type AuthStage = "login" | "context";
 
 function resolveErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
+    const message = error.message.trim();
+
+    if (/<\/?[a-z][\s\S]*>/i.test(message)) {
+      return fallback;
+    }
+
+    return message.replace(/\s+/g, " ");
   }
   return fallback;
+}
+
+function resolveErrorTitle(message: string) {
+  if (/indisponivel|conectar|backend|servidor|api/i.test(message)) {
+    return "Serviço indisponível";
+  }
+
+  return "Não foi possível entrar";
 }
 
 function resolveStageTitle(stage: AuthStage) {
@@ -67,7 +83,7 @@ function resolveStageTitle(stage: AuthStage) {
 function resolveStageSubtitle(stage: AuthStage) {
   switch (stage) {
     case "login":
-      return "Informe o CPF para consultar seus vínculos";
+      return "Informe CPF e senha para entrar";
     case "context":
       return "Escolha o site e confirme a senha desta sessão";
   }
@@ -80,7 +96,6 @@ const AuthPage = () => {
     snapshot,
     setApiBaseUrl,
     switchMode,
-    lookupAccess,
     connectBackend,
     isConnecting,
   } = useSession();
@@ -122,35 +137,29 @@ const AuthPage = () => {
     setSelectedContextId("");
   }
 
-  async function handleLookup() {
+  async function handleLogin() {
     const nextApiBaseUrl = applyApiBaseUrl();
     setLoginMessage("");
 
     try {
-      window.sessionStorage.setItem(AUTH_CONTEXT_SELECTION_KEY, "1");
-      const lookup = await lookupAccess(cpf, nextApiBaseUrl);
-      const contexts = lookup.contexts ?? [];
-
-      if (!lookup.eligible || contexts.length === 0) {
-        window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
-        setLoginMessage(
-          "Nenhum cadastro ativo foi encontrado para este CPF.",
-        );
-        return;
-      }
-
-      setAvailableContexts(contexts);
-      setSelectedContextId(resolveResidentLoginContextKey(contexts[0]));
-      setStage("context");
-      setLoginMessage("Selecione o site que deseja acessar agora.");
+      await connectBackend(
+        {
+          context_key: "",
+          cpf,
+          password,
+          profile_type: "RESIDENT",
+        },
+        nextApiBaseUrl,
+      );
+      window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
+      navigate(returnTo, { replace: true });
     } catch (error) {
       window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
       setLoginMessage(
-        resolveErrorMessage(error, "Não foi possível consultar este CPF."),
+        resolveErrorMessage(error, "Nao foi possivel autenticar no app."),
       );
     }
   }
-
   async function handleContextContinue() {
     if (!selectedContextId) {
       setLoginMessage("Selecione um site para continuar.");
@@ -196,16 +205,28 @@ const AuthPage = () => {
               inputMode="numeric"
             />
           </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-white/50">Senha</Label>
+            <Input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Digite sua senha"
+              className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
+            />
+          </div>
         </div>
 
         <Button
           className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
           disabled={
-            cpf.replace(/\D/g, "").length !== 11 || isConnecting
+            cpf.replace(/\D/g, "").length !== 11 ||
+            !password.trim() ||
+            isConnecting
           }
-          onClick={() => void handleLookup()}
+          onClick={() => void handleLogin()}
         >
-          {isConnecting ? "Consultando..." : "Consultar CPF"}
+          {isConnecting ? "Entrando..." : "Entrar"}
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
@@ -297,7 +318,7 @@ const AuthPage = () => {
 
   return (
     <div
-      className="relative flex min-h-screen flex-col overflow-hidden"
+      className="relative flex min-h-dvh flex-col overflow-x-hidden overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]"
       style={{ background: "linear-gradient(160deg, #080c18 0%, #0f172a 55%, #130e22 100%)" }}
     >
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -306,11 +327,11 @@ const AuthPage = () => {
         <div className="absolute left-1/2 top-1/2 h-96 w-full -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse,rgba(15,23,42,0.60),transparent_70%)]" />
       </div>
 
-      <div className="relative flex flex-1 flex-col items-center px-5 pb-12">
+      <div className="relative flex min-h-dvh flex-col items-center px-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
         <motion.div
           initial={{ opacity: 0, y: -16 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col items-center pb-8 pt-16"
+          className="flex flex-col items-center pb-6 pt-10 sm:pb-8 sm:pt-16"
         >
           <div className="mb-5 flex h-[4.25rem] w-[4.25rem] items-center justify-center rounded-[24px] border border-white/[0.08] bg-white/[0.04] shadow-[0_18px_56px_rgba(0,0,0,0.36)] backdrop-blur-md">
             <img
@@ -372,10 +393,36 @@ const AuthPage = () => {
                 </div>
 
                 {loginMessage && (
-                  <div className="mt-4 rounded-[14px] border border-white/[0.07] bg-white/[0.04] px-4 py-3">
-                    <p className="text-[0.8125rem] leading-relaxed text-white/60">
-                      {loginMessage}
-                    </p>
+                  <div
+                    role="alert"
+                    className="mt-4 rounded-[18px] border border-amber-300/25 bg-amber-300/[0.09] px-4 py-3 text-amber-50 shadow-[0_12px_36px_rgba(0,0,0,0.24)]"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-amber-300/15 text-amber-200">
+                        <AlertCircle className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-amber-100">
+                          {resolveErrorTitle(loginMessage)}
+                        </p>
+                        <p className="mt-1 text-[0.8125rem] leading-relaxed text-amber-50/70">
+                          {loginMessage}
+                        </p>
+                        <button
+                          type="button"
+                          className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-amber-100 transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={isConnecting}
+                          onClick={() =>
+                            void (stage === "context"
+                              ? handleContextContinue()
+                              : handleLogin())
+                          }
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Tentar novamente
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -397,12 +444,17 @@ const AuthPage = () => {
             </button>
           </div>
         </motion.div>
+
+        <div
+          aria-hidden
+          className="h-5 shrink-0"
+        />
       </div>
 
       <Sheet open={advancedOpen} onOpenChange={setAdvancedOpen}>
         <SheetContent
           side="bottom"
-          className="mx-auto w-full max-w-md rounded-t-[32px] border-border/80 px-5 pb-8 pt-6"
+          className="mx-auto max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-[32px] border-border/80 px-5 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-6"
         >
           <SheetHeader className="space-y-2 text-left">
             <Badge variant="outline" className="w-fit rounded-full px-3 py-1">

@@ -12,6 +12,7 @@ import type {
   ChatThread,
   CommonArea,
   ConnectionState,
+  AccessOsRegisterInput,
   CreateBulletinInput,
   CreateIncidentInput,
   CreateReservationInput,
@@ -983,16 +984,15 @@ export async function lookupResidentAppAccess(
   cpf: string,
   baseUrl?: string,
 ): Promise<ResidentAppLookupResult> {
-  const result = await requestJson<ResidentAppLookupResult>(
-    "/auth/person-app/lookup",
-    {
-      baseUrl,
-      method: "POST",
-      body: { cpf: normalizeCpfDigits(cpf) },
-    },
-  );
+  void cpf;
 
-  return ensureLookupProfiles(result);
+  return ensureLookupProfiles({
+    account_status: null,
+    available_profiles: [],
+    contexts: [],
+    eligible: true,
+    has_password: true,
+  });
 }
 
 export async function connectBackendSession(
@@ -1000,20 +1000,55 @@ export async function connectBackendSession(
   baseUrl?: string,
 ) {
   const response = await requestJson<PersonAppAuthResponse>(
-    "/auth/person-app/login",
+    "/auth/access-os/login",
     {
       baseUrl,
       method: "POST",
       body: {
-        context_key: credentials.context_key,
-        cpf: normalizeCpfDigits(credentials.cpf),
+        email: credentials.email,
         password: credentials.password,
-        profile_type: credentials.profile_type,
       },
     },
   );
 
   return createBackendSnapshot(response, baseUrl);
+}
+
+export async function registerAccessOsAccount(
+  payload: AccessOsRegisterInput,
+  baseUrl?: string,
+) {
+  const response = await requestJson<PersonAppAuthResponse>(
+    "/auth/access-os/register",
+    {
+      baseUrl,
+      method: "POST",
+      body: payload,
+    },
+  );
+
+  return createBackendSnapshot(response, baseUrl);
+}
+
+export async function acceptAccessOsInvite(
+  snapshot: SessionSnapshot,
+  token: string,
+) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão AccessOS não autenticada.");
+  }
+
+  const response = await requestJson<PersonAppAuthResponse>(
+    "/access-os/invites/accept",
+    {
+      baseUrl: snapshot.apiBaseUrl,
+      method: "POST",
+      token: snapshot.token,
+      body: { token },
+    },
+  );
+
+  return createBackendSnapshot(response, snapshot.apiBaseUrl);
 }
 
 export async function hydrateBackendSession(snapshot: SessionSnapshot) {
@@ -1022,7 +1057,7 @@ export async function hydrateBackendSession(snapshot: SessionSnapshot) {
   }
 
   const response = await requestJson<PersonAppMeResponse>(
-    "/auth/person-app/me",
+    "/auth/access-os/me",
     {
       baseUrl: snapshot.apiBaseUrl,
       method: "POST",

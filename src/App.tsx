@@ -23,6 +23,7 @@ const DeliveriesPage = lazy(() => import("@/pages/DeliveriesPage"));
 const FinanceiroPage = lazy(() => import("@/pages/FinanceiroPage"));
 const HomePage = lazy(() => import("@/pages/HomePage"));
 const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
+const NoAccessPage = lazy(() => import("@/pages/NoAccessPage"));
 const NotFound = lazy(() => import("@/pages/NotFound"));
 const NotificationsPage = lazy(() => import("@/pages/NotificationsPage"));
 const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
@@ -62,6 +63,14 @@ const ProtectedShell = () => {
 
   if (snapshot.mode === "backend" && !isAuthenticated) {
     return <Navigate to="/auth" replace state={{ from: location }} />;
+  }
+
+  if (
+    snapshot.mode === "backend" &&
+    isAuthenticated &&
+    snapshot.residentAuth?.contexts.length === 0
+  ) {
+    return <NoAccessPage />;
   }
 
   return (

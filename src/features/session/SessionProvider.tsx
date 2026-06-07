@@ -16,9 +16,11 @@ import {
   loadBackendResidents,
   lookupResidentAppAccess,
   normalizeApiBaseUrl,
+  acceptAccessOsInvite,
   readPendingActions,
   readPreviewState,
   readSessionSnapshot,
+  registerAccessOsAccount,
   unregisterResidentPushSubscription,
   saveSessionSnapshot,
   syncPendingActions,
@@ -29,6 +31,7 @@ import {
 } from "@/lib/web-push";
 import type {
   ConnectionState,
+  AccessOsRegisterInput,
   ResidentAppCredentials,
   ResidentAppLookupResult,
   ResidentProfile,
@@ -56,6 +59,11 @@ type SessionContextValue = {
     credentials: ResidentAppCredentials,
     baseUrl?: string,
   ) => Promise<SessionSnapshot>;
+  registerAccessOs: (
+    payload: AccessOsRegisterInput,
+    baseUrl?: string,
+  ) => Promise<SessionSnapshot>;
+  acceptAccessOsInvite: (token: string) => Promise<SessionSnapshot>;
   disconnectBackend: () => void;
   refreshResidents: () => Promise<void>;
   refreshSession: () => Promise<void>;
@@ -284,6 +292,52 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function registerAccessOs(
+    payload: AccessOsRegisterInput,
+    baseUrl?: string,
+  ) {
+    setIsConnecting(true);
+    try {
+      const next = await registerAccessOsAccount(
+        payload,
+        normalizeApiBaseUrl(baseUrl ?? snapshot.apiBaseUrl),
+      );
+      setSnapshot(next);
+      setResidents(await loadBackendResidents(next));
+      toast.success("Conta AccessOS criada.");
+      return next;
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "Falha ao criar conta AccessOS.";
+      toast.error(message);
+      throw error;
+    } finally {
+      setIsConnecting(false);
+    }
+  }
+
+  async function acceptInvite(token: string) {
+    setIsConnecting(true);
+    try {
+      const next = await acceptAccessOsInvite(snapshot, token);
+      setSnapshot(next);
+      setResidents(await loadBackendResidents(next));
+      toast.success("Convite AccessOS aceito.");
+      return next;
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "Falha ao aceitar convite AccessOS.";
+      toast.error(message);
+      throw error;
+    } finally {
+      setIsConnecting(false);
+    }
+  }
+
   function disconnectBackend() {
     const endpoint = readStoredPushEndpoint();
     if (endpoint && snapshot.mode === "backend") {
@@ -355,6 +409,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         switchResident,
         lookupAccess,
         connectBackend,
+        registerAccessOs,
+        acceptAccessOsInvite: acceptInvite,
         disconnectBackend,
         refreshResidents,
         refreshSession,

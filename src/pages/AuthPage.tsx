@@ -1,20 +1,8 @@
 import { useMemo, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  ArrowRight,
-  AlertCircle,
-  ChevronLeft,
-  KeyRound,
-  Network,
-  RefreshCw,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-} from "lucide-react";
+import { ArrowRight, LockKeyhole, Mail, Settings2, ShieldCheck, UserRound } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { APP_TAGLINE } from "@/config/env";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,67 +14,15 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useSession } from "@/features/session/SessionProvider";
-import {
-  countUniqueSiteContexts,
-  countUniqueTenantContexts,
-  formatLookupContextMeta,
-  formatLookupContextTitle,
-  resolveResidentLoginContextKey,
-} from "@/features/session/resident-context";
 import { normalizeApiBaseUrl } from "@/services/mobile-app.service";
-import type { ResidentAppContext } from "@/services/mobile-app.types";
 
-const AUTH_CONTEXT_SELECTION_KEY = "sv-mobile:pending-auth-context-selection";
-
-function maskCpf(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 11);
-  if (digits.length <= 3) return digits;
-  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
-  if (digits.length <= 9) {
-    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-  }
-  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
-}
-
-type AuthStage = "login" | "context";
+type Mode = "login" | "register";
 
 function resolveErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    const message = error.message.trim();
-
-    if (/<\/?[a-z][\s\S]*>/i.test(message)) {
-      return fallback;
-    }
-
-    return message.replace(/\s+/g, " ");
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.replace(/\s+/g, " ");
   }
   return fallback;
-}
-
-function resolveErrorTitle(message: string) {
-  if (/indisponivel|conectar|backend|servidor|api/i.test(message)) {
-    return "Serviço indisponível";
-  }
-
-  return "Não foi possível entrar";
-}
-
-function resolveStageTitle(stage: AuthStage) {
-  switch (stage) {
-    case "login":
-      return "Entrar no app";
-    case "context":
-      return "Selecionar site";
-  }
-}
-
-function resolveStageSubtitle(stage: AuthStage) {
-  switch (stage) {
-    case "login":
-      return "Informe CPF e senha para entrar";
-    case "context":
-      return "Escolha o site e confirme a senha desta sessão";
-  }
 }
 
 const AuthPage = () => {
@@ -97,6 +33,7 @@ const AuthPage = () => {
     setApiBaseUrl,
     switchMode,
     connectBackend,
+    registerAccessOs,
     isConnecting,
   } = useSession();
 
@@ -105,21 +42,19 @@ const AuthPage = () => {
     return state?.from?.pathname ?? "/";
   }, [location.state]);
 
-  const [stage, setStage] = useState<AuthStage>("login");
+  const [mode, setMode] = useState<Mode>("login");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [apiBaseUrl, setApiBaseUrlInput] = useState(snapshot.apiBaseUrl);
-  const [cpf, setCpf] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [password, setPassword] = useState("");
-  const [loginMessage, setLoginMessage] = useState("");
-  const [availableContexts, setAvailableContexts] = useState<ResidentAppContext[]>([]);
-  const [selectedContextId, setSelectedContextId] = useState<string>("");
+  const [message, setMessage] = useState("");
 
   const resolvedApiBaseUrl = useMemo(
     () => normalizeApiBaseUrl(apiBaseUrl),
     [apiBaseUrl],
   );
-  const contextTenantCount = countUniqueTenantContexts(availableContexts);
-  const contextSiteCount = countUniqueSiteContexts(availableContexts);
 
   function applyApiBaseUrl() {
     const nextApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
@@ -128,366 +63,207 @@ const AuthPage = () => {
     return nextApiBaseUrl;
   }
 
-  function resetLogin() {
-    window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
-    setStage("login");
-    setPassword("");
-    setLoginMessage("");
-    setAvailableContexts([]);
-    setSelectedContextId("");
-  }
-
-  async function handleLogin() {
+  async function submit() {
     const nextApiBaseUrl = applyApiBaseUrl();
-    setLoginMessage("");
+    setMessage("");
 
     try {
-      await connectBackend(
-        {
-          context_key: "",
-          cpf,
-          password,
-          profile_type: "RESIDENT",
-        },
-        nextApiBaseUrl,
-      );
-      window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
+      if (mode === "register") {
+        await registerAccessOs(
+          {
+            email,
+            name,
+            password,
+            phone_number: phoneNumber,
+          },
+          nextApiBaseUrl,
+        );
+      } else {
+        await connectBackend(
+          {
+            context_key: "",
+            email,
+            password,
+            profile_type: "RESIDENT",
+          },
+          nextApiBaseUrl,
+        );
+      }
+
       navigate(returnTo, { replace: true });
     } catch (error) {
-      window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
-      setLoginMessage(
-        resolveErrorMessage(error, "Nao foi possivel autenticar no app."),
-      );
-    }
-  }
-  async function handleContextContinue() {
-    if (!selectedContextId) {
-      setLoginMessage("Selecione um site para continuar.");
-      return;
-    }
-
-    try {
-      await connectBackend(
-        {
-          context_key: selectedContextId,
-          cpf,
-          password,
-          profile_type: "RESIDENT",
-        },
-        resolvedApiBaseUrl,
-      );
-      window.sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
-      navigate(returnTo, { replace: true });
-    } catch (error) {
-      setLoginMessage(
-        resolveErrorMessage(error, "Não foi possível ativar o site selecionado."),
+      setMessage(
+        resolveErrorMessage(
+          error,
+          mode === "register"
+            ? "Nao foi possivel criar sua conta AccessOS."
+            : "Nao foi possivel entrar no AccessOS.",
+        ),
       );
     }
   }
 
-  function handleOpenPreview() {
-    switchMode("preview");
-    setAdvancedOpen(false);
-    navigate("/", { replace: true });
-  }
-
-  function renderCredentialStage() {
-    return (
-      <div className="mt-4 flex flex-1 flex-col gap-4">
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-white/50">CPF</Label>
-            <Input
-              value={maskCpf(cpf)}
-              onChange={(event) => setCpf(event.target.value)}
-              placeholder="000.000.000-00"
-              className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
-              inputMode="numeric"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-white/50">Senha</Label>
-            <Input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Digite sua senha"
-              className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
-            />
-          </div>
-        </div>
-
-        <Button
-          className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
-          disabled={
-            cpf.replace(/\D/g, "").length !== 11 ||
-            !password.trim() ||
-            isConnecting
-          }
-          onClick={() => void handleLogin()}
-        >
-          {isConnecting ? "Entrando..." : "Entrar"}
-          <ArrowRight className="h-4 w-4" />
-        </Button>
-      </div>
-    );
-  }
-
-  function renderContextSelection() {
-    return (
-      <div className="mt-4 flex flex-1 flex-col gap-3">
-        <div className="rounded-[16px] border border-white/[0.08] bg-white/[0.04] px-4 py-3">
-          <div className="flex flex-wrap gap-2">
-            <span className="rounded-full bg-blue-500/15 px-2.5 py-1 text-[10px] font-semibold text-blue-400">
-              {availableContexts.length} vínculo(s)
-            </span>
-            <span className="rounded-full bg-white/8 px-2.5 py-1 text-[10px] font-semibold text-white/50">
-              {contextSiteCount} site(s)
-            </span>
-            <span className="rounded-full bg-white/8 px-2.5 py-1 text-[10px] font-semibold text-white/50">
-              {contextTenantCount} tenant(s)
-            </span>
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-2">
-          {availableContexts.map((context) => {
-            const contextId = resolveResidentLoginContextKey(context);
-            const selected = contextId === selectedContextId;
-
-            return (
-              <button
-                key={contextId}
-                type="button"
-                onClick={() => setSelectedContextId(contextId)}
-                className={`w-full rounded-[18px] border p-4 text-left transition-all ${
-                  selected
-                    ? "border-amber-400/50 bg-amber-400/10 shadow-sm shadow-amber-400/10"
-                    : "border-white/[0.08] bg-white/[0.04] hover:border-white/15"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className={`truncate text-sm font-semibold ${selected ? "text-amber-300" : "text-white"}`}>
-                      {formatLookupContextTitle(context)}
-                    </p>
-                    <p className="mt-0.5 text-xs text-white/40">
-                      {formatLookupContextMeta(context)}
-                    </p>
-                  </div>
-                  {selected && (
-                    <span className="shrink-0 rounded-full bg-amber-400/20 px-2.5 py-1 text-[10px] font-semibold text-amber-400">
-                      Selecionado
-                    </span>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="space-y-1.5">
-          <Label className="text-xs font-medium text-white/50">Senha</Label>
-          <Input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Digite sua senha"
-            className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-base text-white placeholder:text-white/25 focus-visible:border-amber-400/50 focus-visible:ring-amber-400/20"
-          />
-        </div>
-
-        <Button
-          className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-900 hover:bg-amber-300"
-          disabled={!selectedContextId || !password.trim() || isConnecting}
-          onClick={() => void handleContextContinue()}
-        >
-          {isConnecting ? "Entrando..." : "Entrar neste site"}
-          <ArrowRight className="h-4 w-4" />
-        </Button>
-        <button
-          type="button"
-          className="text-sm text-white/30 transition-colors hover:text-white/60"
-          onClick={resetLogin}
-        >
-          Usar outro CPF
-        </button>
-      </div>
-    );
-  }
+  const canSubmit =
+    email.trim().length > 3 &&
+    password.trim().length >= 6 &&
+    (mode === "login" ||
+      (name.trim().length >= 2 && phoneNumber.trim().length >= 8));
 
   return (
-    <div
-      className="relative flex min-h-dvh flex-col overflow-x-hidden overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]"
-      style={{ background: "linear-gradient(160deg, #080c18 0%, #0f172a 55%, #130e22 100%)" }}
-    >
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-24 right-[-6rem] h-[28rem] w-[28rem] rounded-full bg-[radial-gradient(circle,rgba(250,204,21,0.09),transparent_55%)]" />
-        <div className="absolute bottom-[-8rem] left-[-6rem] h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(30,64,175,0.10),transparent_55%)]" />
-        <div className="absolute left-1/2 top-1/2 h-96 w-full -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse,rgba(15,23,42,0.60),transparent_70%)]" />
+    <div className="relative flex min-h-dvh flex-col overflow-hidden bg-[#080c18] text-white">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-1/2 top-[-9rem] h-[26rem] w-[26rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(250,204,21,0.12),transparent_62%)]" />
+        <div className="absolute bottom-[-10rem] right-[-8rem] h-[28rem] w-[28rem] rounded-full bg-[radial-gradient(circle,rgba(14,165,233,0.13),transparent_60%)]" />
       </div>
 
-      <div className="relative flex min-h-dvh flex-col items-center px-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
-        <motion.div
-          initial={{ opacity: 0, y: -16 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col items-center pb-6 pt-10 sm:pb-8 sm:pt-16"
-        >
-          <div className="mb-5 flex h-[4.25rem] w-[4.25rem] items-center justify-center rounded-[24px] border border-white/[0.08] bg-white/[0.04] shadow-[0_18px_56px_rgba(0,0,0,0.36)] backdrop-blur-md">
+      <main className="relative mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-10">
+        <header className="pb-8 text-center">
+          <div className="mx-auto mb-5 grid h-[4.25rem] w-[4.25rem] place-items-center rounded-[24px] border border-white/10 bg-white/[0.05] shadow-2xl shadow-black/30">
             <img
               src={`${import.meta.env.BASE_URL}brand-symbol-512.png`}
               alt=""
-              aria-hidden
               className="h-[3.15rem] w-[3.15rem] object-contain"
             />
           </div>
-          <h1 className="text-[2.25rem] font-extrabold leading-none tracking-[-0.07em] text-white">
-            AccessOS
-          </h1>
-          <p className="mt-2 max-w-[18rem] text-center text-[0.8125rem] leading-relaxed text-white/35">
+          <h1 className="text-4xl font-extrabold tracking-[-0.06em]">AccessOS</h1>
+          <p className="mx-auto mt-2 max-w-xs text-sm leading-relaxed text-white/40">
             {APP_TAGLINE}
           </p>
-        </motion.div>
+        </header>
 
-        <motion.div
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.07 }}
-          className="w-full max-w-sm"
-        >
-          <div className="rounded-[28px] border border-white/[0.08] bg-white/[0.05] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.50)] backdrop-blur-xl">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={stage}
-                initial={{ opacity: 0, x: 6 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -6 }}
-                transition={{ duration: 0.15 }}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    {stage === "context" && (
-                      <button
-                        type="button"
-                        onClick={resetLogin}
-                        className="mb-3 flex items-center gap-1 text-xs text-white/35 transition-colors hover:text-white/70"
-                      >
-                        <ChevronLeft className="h-3.5 w-3.5" />
-                        Voltar
-                      </button>
-                    )}
-                    <h2 className="text-xl font-bold text-white">
-                      {resolveStageTitle(stage)}
-                    </h2>
-                    <p className="mt-1 text-[0.8125rem] text-white/45">
-                      {resolveStageSubtitle(stage)}
-                    </p>
-                  </div>
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-white/[0.07] text-white/50">
-                    {stage === "context" ? (
-                      <Network className="h-4.5 w-4.5" />
-                    ) : (
-                      <KeyRound className="h-4.5 w-4.5" />
-                    )}
-                  </div>
-                </div>
-
-                {loginMessage && (
-                  <div
-                    role="alert"
-                    className="mt-4 rounded-[18px] border border-amber-300/25 bg-amber-300/[0.09] px-4 py-3 text-amber-50 shadow-[0_12px_36px_rgba(0,0,0,0.24)]"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-amber-300/15 text-amber-200">
-                        <AlertCircle className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-amber-100">
-                          {resolveErrorTitle(loginMessage)}
-                        </p>
-                        <p className="mt-1 text-[0.8125rem] leading-relaxed text-amber-50/70">
-                          {loginMessage}
-                        </p>
-                        <button
-                          type="button"
-                          className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-amber-100 transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={isConnecting}
-                          onClick={() =>
-                            void (stage === "context"
-                              ? handleContextContinue()
-                              : handleLogin())
-                          }
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                          Tentar novamente
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {stage === "context"
-                  ? renderContextSelection()
-                  : renderCredentialStage()}
-              </motion.div>
-            </AnimatePresence>
-          </div>
-
-          <div className="mt-6 flex justify-center">
+        <section className="rounded-[28px] border border-white/10 bg-white/[0.055] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <div className="grid grid-cols-2 gap-2 rounded-[18px] bg-black/20 p-1">
             <button
               type="button"
-              onClick={() => setAdvancedOpen(true)}
-              className="flex items-center gap-1.5 text-[0.8125rem] text-white/25 transition-colors hover:text-white/55"
+              onClick={() => {
+                setMode("login");
+                setMessage("");
+              }}
+              className={`rounded-[14px] px-3 py-2.5 text-sm font-semibold transition ${
+                mode === "login" ? "bg-amber-400 text-slate-950" : "text-white/50"
+              }`}
             >
-              <Settings2 className="h-3.5 w-3.5" />
-              Opções avançadas
+              Entrar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("register");
+                setMessage("");
+              }}
+              className={`rounded-[14px] px-3 py-2.5 text-sm font-semibold transition ${
+                mode === "register" ? "bg-amber-400 text-slate-950" : "text-white/50"
+              }`}
+            >
+              Criar conta
             </button>
           </div>
-        </motion.div>
 
-        <div
-          aria-hidden
-          className="h-5 shrink-0"
-        />
-      </div>
+          <div className="mt-5 space-y-4">
+            {mode === "register" ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-white/50">Nome completo</Label>
+                <div className="relative">
+                  <UserRound className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+                  <Input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    autoComplete="name"
+                    className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] pl-11 text-white placeholder:text-white/25"
+                    placeholder="Seu nome"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            <div className="space-y-1.5">
+              <Label className="text-xs text-white/50">E-mail</Label>
+              <div className="relative">
+                <Mail className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+                <Input
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
+                  inputMode="email"
+                  className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] pl-11 text-white placeholder:text-white/25"
+                  placeholder="voce@email.com"
+                />
+              </div>
+            </div>
+
+            {mode === "register" ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-white/50">Telefone</Label>
+                <Input
+                  value={phoneNumber}
+                  onChange={(event) => setPhoneNumber(event.target.value)}
+                  autoComplete="tel"
+                  className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-white placeholder:text-white/25"
+                  placeholder="(00) 00000-0000"
+                />
+              </div>
+            ) : null}
+
+            <div className="space-y-1.5">
+              <Label className="text-xs text-white/50">Senha</Label>
+              <div className="relative">
+                <LockKeyhole className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+                <Input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete={mode === "register" ? "new-password" : "current-password"}
+                  type="password"
+                  className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] pl-11 text-white placeholder:text-white/25"
+                  placeholder="Digite sua senha"
+                />
+              </div>
+            </div>
+
+            {message ? (
+              <div className="rounded-[16px] border border-amber-300/25 bg-amber-300/[0.09] px-4 py-3 text-sm text-amber-50/85">
+                {message}
+              </div>
+            ) : null}
+
+            <Button
+              className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-950 hover:bg-amber-300"
+              disabled={!canSubmit || isConnecting}
+              onClick={() => void submit()}
+            >
+              {isConnecting
+                ? mode === "register"
+                  ? "Criando conta..."
+                  : "Entrando..."
+                : mode === "register"
+                  ? "Criar conta AccessOS"
+                  : "Entrar no AccessOS"}
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </section>
+
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen(true)}
+          className="mx-auto mt-6 flex items-center gap-1.5 text-sm text-white/30 transition-colors hover:text-white/60"
+        >
+          <Settings2 className="h-3.5 w-3.5" />
+          Opções avançadas
+        </button>
+      </main>
 
       <Sheet open={advancedOpen} onOpenChange={setAdvancedOpen}>
         <SheetContent
           side="bottom"
-          className="mx-auto max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-[32px] border-border/80 px-5 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-6"
+          className="mx-auto max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-[32px] px-5 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-6"
         >
-          <SheetHeader className="space-y-2 text-left">
-            <Badge variant="outline" className="w-fit rounded-full px-3 py-1">
-              Opções avançadas
-            </Badge>
-            <SheetTitle>Ambiente de validação</SheetTitle>
+          <SheetHeader className="text-left">
+            <SheetTitle>Ambiente</SheetTitle>
             <SheetDescription>
-              Troque entre backend e preview ou aponte a URL da API para ambientes de teste.
+              Configure a URL da API usada pelo AccessOS.
             </SheetDescription>
           </SheetHeader>
-
-          <div className="mt-6 space-y-5">
-            <div className="grid grid-cols-2 gap-3 rounded-[22px] bg-muted/70 p-1.5">
-              <Button
-                type="button"
-                variant={snapshot.mode === "backend" ? "accent" : "ghost"}
-                className="rounded-[18px]"
-                onClick={() => switchMode("backend")}
-              >
-                <ShieldCheck className="h-4 w-4" />
-                Backend
-              </Button>
-              <Button
-                type="button"
-                variant={snapshot.mode === "preview" ? "accent" : "ghost"}
-                className="rounded-[18px]"
-                onClick={handleOpenPreview}
-              >
-                <Sparkles className="h-4 w-4" />
-                Preview
-              </Button>
-            </div>
-
+          <div className="mt-6 space-y-4">
             <div className="space-y-2">
               <Label>Caminho do backend</Label>
               <Input
@@ -497,36 +273,21 @@ const AuthPage = () => {
                 placeholder="http://192.168.0.15:3000"
                 className="h-12 rounded-[18px]"
               />
-              <p className="text-xs text-muted-foreground">
-                Exemplo: http://192.168.18.147:3000
+              <p className="break-all text-xs text-muted-foreground">
+                Atual: {resolvedApiBaseUrl}
               </p>
             </div>
-
-            <div className="rounded-[22px] border border-border/70 bg-muted/35 p-4">
-              <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
-                Configuração atual
-              </p>
-              <p className="mt-2 text-sm font-semibold text-foreground">
-                {snapshot.mode === "backend" ? "Backend real" : "Preview local"}
-              </p>
-              <p className="mt-1 break-all text-sm text-muted-foreground">
-                {snapshot.mode === "backend"
-                  ? resolvedApiBaseUrl
-                  : "Sem API obrigatória neste modo"}
-              </p>
-            </div>
-
             <Button
               type="button"
-              className="h-12 w-full rounded-[20px]"
-              variant="accent"
+              className="h-12 w-full rounded-[18px]"
               onClick={() => {
+                switchMode("backend");
                 applyApiBaseUrl();
                 setAdvancedOpen(false);
               }}
             >
-              Salvar opções
-              <ArrowRight className="h-4 w-4" />
+              <ShieldCheck className="h-4 w-4" />
+              Salvar ambiente
             </Button>
           </div>
         </SheetContent>

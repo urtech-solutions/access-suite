@@ -38,10 +38,17 @@ export type PendingActionType =
   | "CREATE_RESERVATION";
 
 export interface ResidentAppCredentials {
-  cpf: string;
+  email: string;
   context_key: string;
   password: string;
   profile_type?: ResidentAppProfileType;
+}
+
+export interface AccessOsRegisterInput {
+  name: string;
+  email: string;
+  phone_number: string;
+  password: string;
 }
 
 export interface ResidentAppLookupProfile {

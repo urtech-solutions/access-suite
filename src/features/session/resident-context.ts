@@ -81,6 +81,12 @@ export function formatLookupContextTitle(context: ResidentAppContext) {
 }
 
 export function formatLookupContextMeta(context: ResidentAppContext) {
+  if (context.profile_type === "APP_USER") {
+    return [cleanLabel(context.user_role) || "Acesso ao app", cleanLabel(context.tenant_name)]
+      .filter((value) => value.length > 0)
+      .join(" Â· ");
+  }
+
   return [
     context.profile_type === "SYNDIC"
       ? "Painel de síndico"
@@ -98,7 +104,7 @@ export function formatLookupContextMeta(context: ResidentAppContext) {
 export function resolveResidentContextKey(
   context: Pick<ResidentAppContext, "profile_type" | "person_id" | "site_id">,
 ) {
-  if (context.profile_type === "SYNDIC") {
+  if (context.profile_type === "APP_USER" || context.profile_type === "SYNDIC") {
     return context.site_id ?? 0;
   }
 
@@ -108,15 +114,15 @@ export function resolveResidentContextKey(
 export function resolveResidentLoginContextKey(
   context: Pick<
     ResidentAppContext,
-    "context_key" | "profile_type" | "person_id" | "site_id" | "tenant_uuid"
+    "context_key" | "profile_type" | "person_id" | "site_id" | "tenant_uuid" | "user_role"
   >,
 ) {
   if (context.context_key?.trim()) {
     return context.context_key.trim();
   }
 
-  if (context.profile_type === "SYNDIC") {
-    return `${context.profile_type}:${context.tenant_uuid}:${context.site_id ?? 0}`;
+  if (context.profile_type === "APP_USER" || context.profile_type === "SYNDIC") {
+    return `${context.profile_type}:${context.tenant_uuid}:${context.site_id ?? 0}:${context.user_role ?? ""}`;
   }
 
   return `${context.profile_type}:${context.tenant_uuid}:${context.person_id ?? 0}`;

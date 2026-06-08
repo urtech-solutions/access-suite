@@ -1,7 +1,7 @@
 export type SessionMode = "preview" | "backend";
 
-export type ResidentRole = "MORADOR" | "SINDICO";
-export type ResidentAppProfileType = "RESIDENT" | "SYNDIC";
+export type ResidentRole = "MANAGER" | "MORADOR" | "OWNER" | "SINDICO" | "SUPPORT";
+export type ResidentAppProfileType = "APP_USER" | "RESIDENT" | "SYNDIC";
 
 export type ConnectionState = "online" | "offline";
 export type TenantModuleKey = "INCIDENTS" | string;
@@ -70,10 +70,11 @@ export interface ResidentAppLookupResult {
 
 export interface ResidentAppContext {
   context_key?: string;
+  context_type?: "APP_USER" | "PERSON";
   profile_type: ResidentAppProfileType;
   person_id: number | null;
   user_uuid: string | null;
-  user_role: string | null;
+  user_role: ResidentRole | string | null;
   tenant_uuid: string;
   tenant_name: string;
   person_name: string;

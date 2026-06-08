@@ -1,5 +1,4 @@
-import { createPreviewState, demoResidents } from "@/data/demo-data";
-import { DEFAULT_API_BASE_URL, DEFAULT_APP_MODE } from "@/config/env";
+import { DEFAULT_API_BASE_URL } from "@/config/env";
 import { getResidentDeviceInfo } from "@/services/device-info";
 import { readStorage, removeStorage, writeStorage } from "@/services/storage";
 import type {
@@ -35,6 +34,7 @@ import type {
   ResidentDeviceSession,
   ResidentAppSession,
   ResidentProfile,
+  PreviewState,
   ReservationEntry,
   SendIncidentMessageInput,
   SessionSnapshot,
@@ -58,10 +58,7 @@ export const FINANCEIRO_MODULE_KEY = "FINANCEIRO";
 const ACCESS_OS_INCIDENTS_INTEGRATION_PATH = "/integrations/access-os/incidents";
 const PRIVATE_HTTP_HOST_PATTERN =
   /^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})$/;
-const DISABLED_RESIDENT_APP_REQUEST_MODULES = new Set([
-  VISITORS_MODULE_KEY,
-  FINANCEIRO_MODULE_KEY,
-]);
+const DISABLED_RESIDENT_APP_REQUEST_MODULES = new Set([FINANCEIRO_MODULE_KEY]);
 const BULLETIN_TAGS = new Set<BulletinTag>([
   "URGENTE",
   "NOTIFICACAO",
@@ -459,18 +456,9 @@ function attachReservationLinks(reservations: ReservationEntry[]) {
   }));
 }
 
-function getPreviewVisitorsForResident(resident: ResidentProfile) {
-  return readPreviewState().visitors.filter(
-    (visitor) => visitor.host?.id === resident.id,
-  );
-}
-
 function readResidentVisitorsFallback(resident: ResidentProfile) {
   return attachVisitorLinks(
-    readResidentScopedFallback(
-      `visitors:${resident.id}`,
-      getPreviewVisitorsForResident(resident),
-    ),
+    readResidentScopedFallback(`visitors:${resident.id}`, [] as VisitorEntry[]),
   );
 }
 
@@ -497,7 +485,7 @@ function updateVisitorLocally(
   let updatedFromCache: VisitorEntry | null = null;
   const currentCache = readCache<VisitorEntry[]>(
     `visitors:${resident.id}`,
-    previewScoped,
+    [] as VisitorEntry[],
   );
   const nextCache = currentCache.map((visitor) => {
     if (visitor.id !== visitorId) {
@@ -511,7 +499,7 @@ function updateVisitorLocally(
     `visitors:${resident.id}`,
     currentCache.some((visitor) => visitor.id === visitorId)
       ? nextCache
-      : previewScoped,
+      : currentCache,
   );
 
   const updated = updatedFromCache ?? updatedFromPreview;
@@ -522,7 +510,7 @@ function readResidentReservationsFallback(resident: ResidentProfile) {
   return attachReservationLinks(
     readResidentScopedFallback(
       `reservations:${resident.id}`,
-      attachReservationLinks(readPreviewState().reservations),
+      [] as ReservationEntry[],
     ),
   );
 }
@@ -548,7 +536,7 @@ function updateReservationLocally(
   let updatedFromCache: ReservationEntry | null = null;
   const currentCache = readCache<ReservationEntry[]>(
     `reservations:${resident.id}`,
-    previewReservations,
+    [] as ReservationEntry[],
   );
   const nextCache = currentCache.map((reservation) => {
     if (reservation.id !== reservationId) {
@@ -562,7 +550,7 @@ function updateReservationLocally(
     `reservations:${resident.id}`,
     currentCache.some((reservation) => reservation.id === reservationId)
       ? nextCache
-      : previewReservations,
+      : currentCache,
   );
 
   const updated = updatedFromCache ?? updatedFromPreview;
@@ -572,7 +560,7 @@ function updateReservationLocally(
 function readResidentDeliveriesFallback(resident: ResidentProfile) {
   return readResidentScopedFallback(
     `deliveries:${resident.id}`,
-    readPreviewState().deliveries,
+    [] as DeliveryEntry[],
   );
 }
 
@@ -596,7 +584,7 @@ function updateDeliveryLocally(
   let updatedFromCache: DeliveryEntry | null = null;
   const currentCache = readCache<DeliveryEntry[]>(
     `deliveries:${resident.id}`,
-    nextPreview,
+    [] as DeliveryEntry[],
   );
   const nextCache = currentCache.map((delivery) => {
     if (delivery.id !== deliveryId) {
@@ -610,7 +598,7 @@ function updateDeliveryLocally(
     `deliveries:${resident.id}`,
     currentCache.some((delivery) => delivery.id === deliveryId)
       ? nextCache
-      : nextPreview,
+      : currentCache,
   );
 
   return updatedFromCache ?? updatedFromPreview;
@@ -656,14 +644,6 @@ function normalizeResidentAppUser(user?: ResidentAppUser | null) {
   };
 }
 
-function getPreviewSessionUser(): ResidentAppUser {
-  return {
-    uuid: "preview-user",
-    name: "Preview",
-    modules: [INCIDENTS_MODULE_KEY, BULLETIN_MODULE_KEY],
-  };
-}
-
 export function sessionHasModule(
   snapshot: Pick<SessionSnapshot, "mode" | "user">,
   moduleKey: string,
@@ -696,6 +676,14 @@ function resolveResidentRole(name: string) {
 }
 
 function resolveResidentRoleFromContext(context: ResidentAppContext) {
+  if (context.profile_type === "APP_USER") {
+    const role = String(context.user_role ?? "").trim().toUpperCase();
+    if (role === "OWNER" || role === "MANAGER" || role === "SUPPORT") {
+      return role;
+    }
+    return "MANAGER";
+  }
+
   if (context.profile_type === "SYNDIC") {
     return "SINDICO";
   }
@@ -704,6 +692,13 @@ function resolveResidentRoleFromContext(context: ResidentAppContext) {
 }
 
 function resolveContextId(context: ResidentAppContext) {
+  if (context.profile_type === "APP_USER") {
+    if (context.site_id) {
+      return context.site_id;
+    }
+    throw new Error("Contexto AccessOS app-only sem site vinculado.");
+  }
+
   if (context.profile_type === "SYNDIC") {
     if (context.site_id) {
       return context.site_id;
@@ -744,9 +739,9 @@ function ensureResidentWriteAccess(
   resident: ResidentProfile,
   featureLabel: string,
 ) {
-  if (resident.role === "SINDICO") {
+  if (resident.role !== "MORADOR") {
     throw new Error(
-      `${featureLabel} está disponível apenas no perfil morador. No perfil síndico, o app opera em modo de acompanhamento.`,
+      `${featureLabel} está disponível apenas no perfil morador. Neste perfil, o app opera em modo de acompanhamento.`,
     );
   }
 }
@@ -759,9 +754,9 @@ export function mapResidentContextToProfile(
     trimValue(context.site_name) ||
     trimValue(context.context_label) ||
     trimValue(context.tenant_name) ||
-    (context.profile_type === "SYNDIC"
-      ? "Site vinculado"
-      : "Residência vinculada");
+    (context.profile_type === "RESIDENT"
+      ? "Residência vinculada"
+      : "Site vinculado");
 
   return {
     id: contextId,
@@ -859,10 +854,10 @@ function applySessionIdentity(
 
 export function getDefaultSessionSnapshot(): SessionSnapshot {
   return {
-    mode: DEFAULT_APP_MODE === "backend" ? "backend" : "preview",
+    mode: "backend",
     apiBaseUrl: normalizeApiBaseUrl(DEFAULT_API_BASE_URL),
-    resident: demoResidents[0],
-    user: getPreviewSessionUser(),
+    resident: null,
+    user: null,
     residentAuth: null,
     token: null,
     refreshToken: null,
@@ -874,24 +869,28 @@ export function readSessionSnapshot(): SessionSnapshot {
     SESSION_KEY,
     getDefaultSessionSnapshot(),
   );
+
+  if (snapshot.mode !== "backend") {
+    return {
+      ...getDefaultSessionSnapshot(),
+      apiBaseUrl: normalizeApiBaseUrl(snapshot.apiBaseUrl),
+    };
+  }
+
   return {
     ...snapshot,
+    mode: "backend",
     apiBaseUrl: normalizeApiBaseUrl(snapshot.apiBaseUrl),
-    user:
-      snapshot.mode === "preview"
-        ? normalizeResidentAppUser(snapshot.user) ?? getPreviewSessionUser()
-        : normalizeResidentAppUser(snapshot.user),
+    user: normalizeResidentAppUser(snapshot.user),
   };
 }
 
 export function saveSessionSnapshot(snapshot: SessionSnapshot) {
   writeStorage(SESSION_KEY, {
     ...snapshot,
+    mode: "backend",
     apiBaseUrl: normalizeApiBaseUrl(snapshot.apiBaseUrl),
-    user:
-      snapshot.mode === "preview"
-        ? normalizeResidentAppUser(snapshot.user) ?? getPreviewSessionUser()
-        : normalizeResidentAppUser(snapshot.user),
+    user: normalizeResidentAppUser(snapshot.user),
   });
 }
 
@@ -900,10 +899,19 @@ export function resetSessionSnapshot() {
 }
 
 export function readPreviewState() {
-  return readStorage(PREVIEW_STATE_KEY, createPreviewState());
+  return readStorage<PreviewState>(PREVIEW_STATE_KEY, {
+    residents: [],
+    visitors: [],
+    incidents: [],
+    bulletin: [],
+    commonAreas: [],
+    reservations: [],
+    deliveries: [],
+    chats: [],
+  });
 }
 
-export function savePreviewState(state: ReturnType<typeof createPreviewState>) {
+export function savePreviewState(state: PreviewState) {
   writeStorage(PREVIEW_STATE_KEY, state);
 }
 
@@ -925,12 +933,10 @@ function removePendingAction(id: string) {
 }
 
 function upsertPreviewState<
-  K extends keyof ReturnType<typeof createPreviewState>,
+  K extends keyof PreviewState,
 >(
   key: K,
-  updater: (
-    value: ReturnType<typeof createPreviewState>[K],
-  ) => ReturnType<typeof createPreviewState>[K],
+  updater: (value: PreviewState[K]) => PreviewState[K],
 ) {
   const state = readPreviewState();
   const next = {
@@ -1143,7 +1149,7 @@ export async function loadBackendResidents(snapshot: SessionSnapshot) {
 
 export function disconnectBackendSession() {
   const fallback = getDefaultSessionSnapshot();
-  saveSessionSnapshot({ ...fallback, mode: "preview" });
+  saveSessionSnapshot({ ...fallback, mode: "backend" });
 }
 
 export async function getVisitorSettings(
@@ -1293,23 +1299,7 @@ export async function rotateVisitorLink(
   resident: ResidentProfile,
   visitorId: number,
 ) {
-  ensureResidentWriteAccess(resident, "A rotação de links de convites");
-
-  if (isResidentAppModuleRequestDisabled(VISITORS_MODULE_KEY)) {
-    const fallbackLink = `https://preview.securityvision.local/public/external-events/visitor-${visitorId}?t=${generateId()}`;
-    writeVisitorLink(visitorId, fallbackLink);
-    const updated = updateVisitorLocally(resident, visitorId, (visitor) => ({
-      ...visitor,
-      public_link: fallbackLink,
-    }));
-
-    if (!updated) {
-      throw new Error("Convite não disponível localmente.");
-    }
-
-    return updated;
-  }
-
+  ensureResidentWriteAccess(resident, "A rotação de links de convites");
   if (!isOnlineBackend(snapshot, connectionState)) {
     throw new Error(
       "A rotação do link do convite exige conexão com o backend.",
@@ -1345,37 +1335,7 @@ async function resolveVisitorDecision(
   ensureResidentWriteAccess(
     resident,
     action === "approve" ? "A aprovação de convites" : "A rejeição de convites",
-  );
-
-  if (isResidentAppModuleRequestDisabled(VISITORS_MODULE_KEY)) {
-    const resolvedAt = new Date().toISOString();
-    const updated = updateVisitorLocally(resident, visitorId, (visitor) => ({
-      ...visitor,
-      status: action === "approve" ? "ACTIVE" : "REJECTED",
-      invitation_status: action === "approve" ? "ACTIVE" : "REJECTED",
-      current_registration: visitor.current_registration
-        ? {
-            ...visitor.current_registration,
-            status: action === "approve" ? "APPROVED" : "REJECTED",
-            approved_at:
-              action === "approve"
-                ? resolvedAt
-                : visitor.current_registration.approved_at ?? null,
-            rejected_at:
-              action === "reject"
-                ? resolvedAt
-                : visitor.current_registration.rejected_at ?? null,
-          }
-        : visitor.current_registration,
-    }));
-
-    if (!updated) {
-      throw new Error("Convite não disponível localmente.");
-    }
-
-    return updated;
-  }
-
+  );
   if (!isOnlineBackend(snapshot, connectionState)) {
     throw new Error(
       "A validação do convidado exige conexão com o backend.",
@@ -1792,7 +1752,7 @@ function getPreviewIncidentTopics(siteId: number): IncidentTopic[] {
 function getPreviewIncidentSettings(siteId: number, siteName: string): IncidentModuleSettings {
   return {
     id: siteId,
-    tenant_uuid: "tenant-demo-condominio",
+    tenant_uuid: "",
     site_id: siteId,
     enabled: true,
     site: {
@@ -1800,7 +1760,7 @@ function getPreviewIncidentSettings(siteId: number, siteName: string): IncidentM
       name: siteName,
       tags: ["CONDOMINIO"],
     },
-    topics: getPreviewIncidentTopics(siteId),
+    topics: [],
   };
 }
 
@@ -1811,7 +1771,7 @@ function getIncidentTopicLabel(
 ) {
   const topics = settings?.topics?.length
     ? settings.topics
-    : getPreviewIncidentTopics(resident.site_id);
+    : [];
   return topics.find((item) => item.id === topicId) ?? null;
 }
 
@@ -1916,32 +1876,8 @@ export async function listIncidentParticipantOptions(
     return [];
   }
 
-  const previewOptionMap = new Map<number, IncidentParticipantOption>();
-  demoResidents
-    .filter((candidate) => candidate.site_id === resident.site_id)
-    .forEach((candidate) => {
-      previewOptionMap.set(candidate.id, {
-        id: candidate.id,
-        name: candidate.name,
-        photo_url: null,
-        unit_label: candidate.unit_label ?? null,
-      });
-    });
-  readScopedPreviewIncidents(resident).forEach((incident) => {
-    if (incident.person && !previewOptionMap.has(incident.person.id)) {
-      previewOptionMap.set(incident.person.id, {
-        id: incident.person.id,
-        name: incident.person.name,
-        photo_url: null,
-        unit_label: incident.person.unit_label ?? null,
-      });
-    }
-  });
-  previewOptionMap.delete(resident.id);
-  const previewOptions = Array.from(previewOptionMap.values());
-
   if (!isOnlineBackend(snapshot, connectionState)) {
-    return previewOptions;
+    return [];
   }
 
   try {
@@ -1955,7 +1891,7 @@ export async function listIncidentParticipantOptions(
       },
     );
   } catch {
-    return previewOptions;
+    return [];
   }
 }
 
@@ -1972,24 +1908,10 @@ export async function listIncidents(
     return [];
   }
 
-  const previewIncidents = readScopedPreviewIncidents(resident).filter((incident) => {
-    if (filters.status && filters.status !== "all" && incident.status !== filters.status) {
-      return false;
-    }
-    if (
-      filters.topicId &&
-      filters.topicId !== "all" &&
-      String(incident.topic?.id ?? "") !== String(filters.topicId)
-    ) {
-      return false;
-    }
-    return true;
-  });
-
   if (!isOnlineBackend(snapshot, connectionState)) {
     return readResidentScopedFallback(
       incidentCacheKey(resident, filters),
-      previewIncidents,
+      [] as IncidentEntry[],
     );
   }
 
@@ -2011,7 +1933,7 @@ export async function listIncidents(
   } catch {
     return readResidentScopedFallback(
       incidentCacheKey(resident, filters),
-      previewIncidents,
+      [] as IncidentEntry[],
     );
   }
 }
@@ -2026,15 +1948,14 @@ export async function getIncident(
     return null;
   }
 
-  const previewIncident =
-    readScopedPreviewIncidents(resident).find((incident) => incident.id === incidentId) ??
+  const cachedIncident =
     readCache<IncidentEntry[]>(incidentCacheKey(resident), []).find(
       (incident) => incident.id === incidentId,
     ) ??
     null;
 
   if (!isOnlineBackend(snapshot, connectionState)) {
-    return previewIncident;
+    return cachedIncident;
   }
 
   try {
@@ -2061,7 +1982,7 @@ export async function getIncident(
     );
     return normalizedIncident;
   } catch {
-    return previewIncident;
+    return cachedIncident;
   }
 }
 
@@ -2448,11 +2369,9 @@ export async function addIncidentParticipant(
     throw new Error("Incidente não encontrado.");
   }
 
-  const participantProfile =
-    demoResidents.find((candidate) => candidate.id === personId) ??
-    readScopedPreviewIncidents(resident)
-      .map((candidate) => candidate.person)
-      .find((candidate) => candidate?.id === personId);
+  const participantProfile = readScopedPreviewIncidents(resident)
+    .map((candidate) => candidate.person)
+    .find((candidate) => candidate?.id === personId);
   if (!participantProfile) {
     throw new Error("Participante não encontrado.");
   }
@@ -2578,9 +2497,6 @@ export async function listBulletin(
   const activeResident = resident ?? snapshot.resident ?? null;
   const siteId = activeResident?.site_id;
   const apiSiteId = siteId && siteId > 0 ? siteId : undefined;
-  const previewBulletin = readPreviewState().bulletin.filter(
-    (post) => post.site_id == null || post.site_id === siteId,
-  );
   const cacheName = bulletinCacheKey(apiSiteId ?? siteId);
 
   if (!sessionHasModule(snapshot, BULLETIN_MODULE_KEY)) {
@@ -2588,7 +2504,7 @@ export async function listBulletin(
   }
 
   if (!isOnlineBackend(snapshot, connectionState)) {
-    return readResidentScopedFallback(cacheName, previewBulletin);
+    return readResidentScopedFallback(cacheName, [] as BulletinPost[]);
   }
 
   try {
@@ -2608,7 +2524,7 @@ export async function listBulletin(
       return [] as BulletinPost[];
     }
 
-    return readResidentScopedFallback(cacheName, previewBulletin);
+    return readResidentScopedFallback(cacheName, [] as BulletinPost[]);
   }
 }
 
@@ -2710,13 +2626,11 @@ export async function listCommonAreas(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
 ) {
-  const previewAreas = readPreviewState().commonAreas;
-
   if (
     isResidentAppModuleRequestDisabled(COMMON_AREAS_MODULE_KEY) ||
     !isOnlineBackend(snapshot, connectionState)
   ) {
-    return readResidentScopedFallback("common-areas", previewAreas);
+    return readResidentScopedFallback("common-areas", [] as CommonArea[]);
   }
 
   try {
@@ -2730,7 +2644,7 @@ export async function listCommonAreas(
     writeCache("common-areas", areas);
     return areas;
   } catch {
-    return readResidentScopedFallback("common-areas", previewAreas);
+    return readResidentScopedFallback("common-areas", [] as CommonArea[]);
   }
 }
 
@@ -2842,10 +2756,7 @@ export async function createReservation(
       location: area.location ?? null,
     },
     person: { id: resident.id, name: resident.name },
-    public_link:
-      localStatus === "CONFIRMED"
-        ? `https://preview.securityvision.local/public/external-events/reservation-${localReservationId}?t=demo`
-        : null,
+    public_link: null,
     local_only: snapshot.mode === "preview" || requestsDisabled,
     pending_sync: snapshot.mode === "backend" && !requestsDisabled,
   };
@@ -2912,16 +2823,8 @@ export async function rotateReservationLink(
     );
     writeCache(`reservations:${resident.id}`, next);
     return rotated;
-  }
-
-  const fallbackLink = `https://preview.securityvision.local/public/external-events/reservation-${reservationId}?t=${generateId()}`;
-  writeReservationLink(reservationId, fallbackLink);
-  return (
-    updateReservationLocally(resident, reservationId, (reservation) => ({
-      ...reservation,
-      public_link: fallbackLink,
-    })) ?? undefined
-  );
+  }
+  throw new Error("A rotacao do link da reserva exige conexao com o backend.");
 }
 
 export async function updateReservationHeadcount(
@@ -3521,10 +3424,8 @@ export async function listChatThreads(
   connectionState: ConnectionState,
   resident: ResidentProfile,
 ) {
-  const previewThreads = readPreviewState().chats;
-
   if (!isOnlineBackend(snapshot, connectionState)) {
-    return readResidentScopedFallback(`chat-threads:${resident.id}`, previewThreads);
+    return readResidentScopedFallback(`chat-threads:${resident.id}`, [] as ChatThread[]);
   }
 
   try {
@@ -3541,7 +3442,7 @@ export async function listChatThreads(
     writeCache(`chat-threads:${resident.id}`, threads);
     return threads;
   } catch {
-    return readResidentScopedFallback(`chat-threads:${resident.id}`, previewThreads);
+    return readResidentScopedFallback(`chat-threads:${resident.id}`, [] as ChatThread[]);
   }
 }
 
@@ -3555,28 +3456,8 @@ export async function listChatContacts(
     limit?: number;
   } = {},
 ) {
-  const previewContacts = readPreviewState()
-    .residents.filter(
-      (candidate) =>
-        candidate.id !== resident.id &&
-        candidate.site_id === resident.site_id &&
-        candidate.role === "MORADOR" &&
-        (!options.search ||
-          candidate.name.toLowerCase().includes(options.search.toLowerCase())),
-    )
-    .map((candidate) => ({
-      person_id: candidate.id,
-      name: candidate.name,
-      site_id: candidate.site_id,
-      site_name: candidate.site_name,
-      conversation_uuid: null,
-      last_message_at: null,
-      unit_label: candidate.unit_label ?? null,
-      avatar_label: candidate.avatar,
-    }));
-
   if (!isOnlineBackend(snapshot, connectionState)) {
-    return previewContacts;
+    return [];
   }
 
   try {
@@ -3599,7 +3480,7 @@ export async function listChatContacts(
     );
     return people.map(mapChatPerson);
   } catch {
-    return previewContacts;
+    return [];
   }
 }
 
@@ -3609,18 +3490,10 @@ export async function listChatDirectMessages(
   resident: ResidentProfile,
   targetPerson: ChatContact,
 ) {
-  const previewThread = readPreviewState().chats.find(
-    (thread) =>
-      thread.type === "DIRECT" &&
-      (thread.id === targetPerson.conversation_uuid ||
-        thread.counterpart_label === targetPerson.name),
-  );
-  const previewMessages = previewThread?.messages ?? [];
-
   if (!isOnlineBackend(snapshot, connectionState)) {
     return {
-      conversation: previewThread ?? null,
-      messages: previewMessages,
+      conversation: null,
+      messages: [],
     };
   }
 
@@ -3642,8 +3515,8 @@ export async function listChatDirectMessages(
     };
   } catch {
     return {
-      conversation: previewThread ?? null,
-      messages: previewMessages,
+      conversation: null,
+      messages: [],
     };
   }
 }
@@ -3736,17 +3609,8 @@ export async function sendDirectChatMessage(
         throw error;
       }
     }
-  }
-
-  const thread = previewEnsureDirectThread(resident, targetPerson);
-  return sendChatMessage(
-    snapshot,
-    connectionState,
-    resident,
-    thread.id,
-    normalizedMessage,
-    attachment,
-  );
+  }
+  throw new Error("O envio de mensagens exige conexao com o backend.");
 }
 
 export async function listChatPortariaMessages(
@@ -3755,16 +3619,8 @@ export async function listChatPortariaMessages(
   resident: ResidentProfile,
   siteId: number,
 ) {
-  const previewThread = readPreviewState().chats.find(
-    (thread) => thread.type === "PORTARIA" && thread.site_id === siteId,
-  );
-  const previewMessages = previewThread?.messages ?? [];
-
   if (!isOnlineBackend(snapshot, connectionState)) {
-    return {
-      conversation: previewThread ?? null,
-      messages: previewMessages,
-    };
+    return { conversation: null, messages: [] };
   }
 
   try {
@@ -3785,10 +3641,7 @@ export async function listChatPortariaMessages(
       messages: history.messages.map((message) => mapChatMessage(message, resident)),
     };
   } catch {
-    return {
-      conversation: previewThread ?? null,
-      messages: previewMessages,
-    };
+    return { conversation: null, messages: [] };
   }
 }
 
@@ -3835,22 +3688,8 @@ export async function sendPortariaChatMessage(
         throw error;
       }
     }
-  }
-
-  const thread =
-    readPreviewState().chats.find(
-      (candidate) => candidate.type === "PORTARIA" && candidate.site_id === siteId,
-    ) ??
-    createPreviewPortariaThread(resident, siteId);
-
-  return sendChatMessage(
-    snapshot,
-    connectionState,
-    resident,
-    thread.id,
-    normalizedMessage,
-    attachment,
-  );
+  }
+  throw new Error("O envio de mensagens para a portaria exige conexao com o backend.");
 }
 
 function createPreviewPortariaThread(resident: ResidentProfile, siteId: number) {

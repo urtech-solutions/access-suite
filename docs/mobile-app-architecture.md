@@ -23,7 +23,7 @@ Evoluir o `access-suite` para o MVP do app mobile da plataforma SaaS sem reescre
 
 ## Escopo implementado neste MVP
 
-- visao mobile para `Morador` e `Sindico` em `preview` e `backend`;
+- visao mobile para `Morador` e `Sindico` autenticada pelo backend;
 - dashboard residencial com contexto ativo de condominio;
 - identidade por `CPF` com multi-contexto entre sites e tenants;
 - modulo de visitantes com convite, aprovacao, historico e retorno operacional;
@@ -36,15 +36,8 @@ Evoluir o `access-suite` para o MVP do app mobile da plataforma SaaS sem reescre
 
 ## Estrategia de integracao
 
-O app opera em dois modos:
+O app usa autenticacao propria de pessoa cadastrada por `CPF + senha` via `auth/person-app`:
 
-1. `preview`
-- sessao local com personas seeded;
-- ideal para validacao de UX e fluxo de produto;
-- persistencia local e fila pendente no proprio navegador.
-
-2. `backend`
-- usa autenticacao propria de pessoa cadastrada por `CPF + senha` via `auth/person-app`;
 - o token pertence a identidade do CPF e o contexto ativo (`tenant/site/unidade/papel`) e separado;
 - quando o mesmo CPF for liberado em novos sites ou tenants, os novos contextos aparecem na sessao do app sem recriar conta;
 - integra, neste corte, com endpoints proprios do app mobile:
@@ -55,6 +48,30 @@ O app opera em dois modos:
   - `resident-app/reservations`
   - `resident-app/deliveries`
   - `resident-app/chat`
+
+## Atualizacao 2026-06-07 - AccessOS backend-only
+
+O fluxo de sessao foi endurecido neste corte:
+
+- o app nao possui mais modo `preview`
+- o shell abre sempre em sessao real do backend
+- o login usa `auth/access-os/login`
+- a reidratacao de sessao usa `auth/access-os/me`
+- a tela protegida falha em `NoAccess` quando existir token sem residente
+  resolvido ou sem contexto residencial valido
+- o seletor de residencia mostra apenas tenants reais retornados pela sessao
+
+Impacto pratico:
+
+- a validacao local passou a depender de backend/proxy real ou mock de API
+  configurado no Vite
+- o formulario de autenticacao agora aceita submit por `Enter`, alinhando o app
+  ao fluxo real de login AccessOS
+
+## Atualizacao do contrato de autenticacao
+
+Onde este documento ainda mencionar `person-app`, leia como contrato legado. O
+estado atual da aplicacao usa a superficie `access-os` para login e sessao.
 
 ## Evolucao estrutural aplicada
 

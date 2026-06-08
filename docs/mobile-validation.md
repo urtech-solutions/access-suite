@@ -8,7 +8,7 @@ Validar o MVP mobile diretamente no navegador do celular, sem empacotar Android/
 
 - celular e computador na mesma rede Wi-Fi;
 - dependencias instaladas no `access-suite`;
-- porta `8080` liberada na maquina onde o app vai rodar.
+- porta `5123` liberada na maquina onde o app vai rodar.
 
 ## Modo mais rapido
 
@@ -21,13 +21,13 @@ npm run dev:mobile
 Depois, no celular, abra:
 
 ```text
-http://SEU_IP_LOCAL:8080
+http://SEU_IP_LOCAL:5123
 ```
 
 Exemplo:
 
 ```text
-http://192.168.0.15:8080
+http://192.168.0.15:5123
 ```
 
 ## Validacao com Docker
@@ -64,6 +64,10 @@ Depois abra no celular:
 http://SEU_IP_LOCAL:8080
 ```
 
+Observacao: o `profile dev` em Docker continua em `8080`, mas o
+desenvolvimento local fora do container passou a usar `npm run dev:mobile` em
+`5123`.
+
 ## O que foi adicionado para isso
 
 - `Dockerfile` multi-stage;
@@ -92,19 +96,9 @@ Use o IPv4 da placa de rede conectada ao Wi-Fi.
 O `docker compose up -d --build` agora reflete o ambiente real do app:
 
 - sobe apenas o container runtime;
-- inicia o app em `backend` por padrao;
+- inicia direto na autenticacao real;
 - usa `VITE_API_URL` apontando para a API real;
 - o container de desenvolvimento so sobe se voce pedir explicitamente com `--profile dev`.
-
-## Modo preview do MVP
-
-Se quiser forcar o app a abrir em preview dentro do container runtime:
-
-```bash
-VITE_APP_MODE=preview docker compose --env-file .env.docker up -d --build
-```
-
-Ou altere `VITE_APP_MODE=preview` no `.env.docker`.
 
 ## Validacao com backend real do morador
 
@@ -113,6 +107,7 @@ Quando quiser validar integracao:
 1. suba o backend;
 2. no backend, inclua o origin do app em `CORS_ORIGIN`:
    - `http://SEU_IP_LOCAL:8088`
+   - `http://SEU_IP_LOCAL:5123`
    - `http://SEU_IP_LOCAL:8080` se tambem usar o profile `dev`
 3. recrie o backend para aplicar o `.env`;
 4. abra o app no celular;
@@ -151,21 +146,28 @@ Verifique:
 - se o celular esta na mesma rede;
 - se esta usando o IP da maquina host e nao IP de container;
 - se firewall/antivirus nao bloqueou a porta;
-- se a porta `8080` ou `4173` esta liberada;
+- se a porta `5123`, `8080` ou `4173` esta liberada;
 - se voce abriu com `http://` e nao `https://`.
 
 ## Fluxo esperado do backend
 
-- `lookup` do CPF no endpoint `auth/person-app/lookup`;
-- `login` por CPF, senha e contexto em `auth/person-app/login`;
-- revalidacao da sessao em `auth/person-app/me`;
-- selecao de contexto quando houver mais de uma unidade;
+- `login` por e-mail e senha em `auth/access-os/login`;
+- revalidacao da sessao em `auth/access-os/me`;
+- aceite de convite quando a conta ainda nao possui vinculo ativo;
 - consumo dos endpoints do app:
   - `resident-app/visitors`
   - `resident-app/incidents`
   - `resident-app/bulletin`
   - `resident-app/common-areas`
   - `resident-app/reservations`
+
+## Atualizacao 2026-06-07
+
+- o app nao alterna mais para modo `preview`; toda validacao deve assumir
+  autenticacao real ou mock de API no Vite
+- para validar o publish web em subpath, use `npm run dev` e abra
+  `http://SEU_IP_LOCAL:3004/access-os/`
+- o proxy local do Vite passou a mirar `http://localhost:3333` por padrao
 
 ## Recomendacao para esta fase
 
@@ -174,13 +176,7 @@ Para um teste mais proximo do ambiente real, use:
 1. `cp .env.docker.example .env.docker`
 2. ajuste `VITE_API_URL` para o backend real
 3. `docker compose --env-file .env.docker up -d --build`
-4. valide o login por CPF e os modulos reais
-
-Para os primeiros testes controlados de UX, use:
-
-1. `npm run dev:mobile`
-2. valide primeiro em `Preview`
-3. depois troque para `Backend` e teste com um CPF real liberado no Management
+4. valide o login AccessOS e os modulos reais
 
 Se quiser isolar o ambiente e evitar depender de Node local:
 

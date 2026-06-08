@@ -23,14 +23,27 @@ npm run dev:mobile
 App em:
 
 ```text
-http://localhost:8080
+http://localhost:5123
 ```
 
-O arquivo `.env.development.local` deixa o app em modo `backend` e habilita
-`VITE_DEV_API_MOCK=true`. Nesse modo, o Vite responde as chamadas `/api/*` com
-contratos JSON definidos para desenvolvimento, sem exigir o backend real. Para
-testar contra o backend real em `VITE_DEV_API_PROXY_TARGET`, altere
-`VITE_DEV_API_MOCK=false`.
+Esse fluxo abre o shell mobile direto no navegador, sem subpath, com proxy
+local para a API. O alvo padrao do proxy agora e `http://localhost:3333`; se
+voce precisar apontar para outro backend, ajuste `VITE_DEV_API_PROXY_TARGET`.
+
+### Desenvolvimento web no subpath AccessOS
+
+```bash
+npm run dev
+```
+
+App em:
+
+```text
+http://localhost:3004/access-os/
+```
+
+Esse modo replica o publish web sob `/access-os/`, util para validar assets,
+links e base path antes de subir no gateway HTTPS.
 
 ### Validacao mobile em Docker
 
@@ -61,6 +74,17 @@ http://SEU_IP_LOCAL:8080
 ```
 
 O container de desenvolvimento so sobe quando solicitado com `--profile dev`.
+
+## Contrato atual de autenticacao
+
+O app deixou de alternar entre `preview` e `backend`. O fluxo atual e
+backend-only:
+
+- login em `auth/access-os/login`
+- reidratacao de sessao em `auth/access-os/me`
+- bloqueio em tela de `sem acesso` quando a conta autenticada nao possui
+  contexto residencial ativo
+- selecao de residencia apenas entre contextos reais retornados pelo backend
 
 ## Documentacao
 

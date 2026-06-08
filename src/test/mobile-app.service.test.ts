@@ -34,6 +34,7 @@ import {
   normalizeApiBaseUrl,
   readPendingActions,
   readPreviewState,
+  readSessionSnapshot,
   saveSessionSnapshot,
 } from "@/services/mobile-app.service";
 import type {
@@ -57,55 +58,18 @@ describe("mobile-app service", () => {
     );
   });
 
-  it("looks up person app contexts through the auth person-app API", async () => {
-    const lookup = {
-      eligible: true,
-      has_password: true,
-      account_status: "ACTIVE",
-      contexts: [
-        {
-          context_key: "RESIDENT:tenant-a:101",
-          profile_type: "RESIDENT",
-          person_id: 101,
-          user_uuid: null,
-          user_role: null,
-          tenant_uuid: "tenant-a",
-          tenant_name: "Condominio A",
-          person_name: "Maria",
-          site_id: 11,
-          site_name: "Torre Azul",
-          residence_block: "A",
-          residence_apartment: "101",
-          unit_label: "A - 101",
-          context_label: "Condominio A - Torre Azul - A - 101",
-        },
-      ],
-      available_profiles: [],
-    };
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: {
-        get: (name: string) =>
-          name.toLowerCase() === "content-type" ? "application/json" : null,
-      },
-      json: async () => lookup,
-    });
+  it("keeps access lookup local for the AccessOS login screen", async () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
       lookupResidentAppAccess("070.097.183-18", "http://localhost:3000"),
     ).resolves.toMatchObject({ eligible: true });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3000/auth/person-app/lookup",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ cpf: "07009718318" }),
-      }),
-    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("logs in with the selected composed person app context", async () => {
+  it("logs in through the AccessOS auth API", async () => {
     const response = {
       access_token: "person-app-token",
       refresh_token: null,
@@ -164,6 +128,7 @@ describe("mobile-app service", () => {
       {
         context_key: "RESIDENT:tenant-a:101",
         cpf: "070.097.183-18",
+        email: "maria@example.com",
         password: "070",
         profile_type: "RESIDENT",
       },
@@ -173,20 +138,18 @@ describe("mobile-app service", () => {
     expect(snapshot.token).toBe("person-app-token");
     expect(snapshot.resident?.id).toBe(101);
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3000/auth/person-app/login",
+      "http://localhost:3000/auth/access-os/login",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          context_key: "RESIDENT:tenant-a:101",
-          cpf: "07009718318",
+          email: "maria@example.com",
           password: "070",
-          profile_type: "RESIDENT",
         }),
       }),
     );
   });
 
-  it("hides gateway HTML when the person app login endpoint is unavailable", async () => {
+  it("hides gateway HTML when the AccessOS login endpoint is unavailable", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 502,
@@ -214,7 +177,7 @@ describe("mobile-app service", () => {
     );
   });
 
-  it("hydrates the active person app context through the auth person-app me API", async () => {
+  it("hydrates the active context through the AccessOS me API", async () => {
     const activeContext = {
       context_key: "RESIDENT:tenant-a:101",
       profile_type: "RESIDENT" as const,
@@ -272,7 +235,7 @@ describe("mobile-app service", () => {
     expect(hydrated.resident?.id).toBe(101);
     expect(hydrated.user?.modules).toEqual(["INCIDENTS", "BULLETIN"]);
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3000/auth/person-app/me",
+      "http://localhost:3000/auth/access-os/me",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -280,6 +243,29 @@ describe("mobile-app service", () => {
         }),
       }),
     );
+  });
+
+  it("discards a persisted preview session and starts logged out", () => {
+    localStorage.setItem(
+      "sv-mobile:session",
+      JSON.stringify({
+        mode: "preview",
+        apiBaseUrl: "/api",
+        resident,
+        user: { uuid: "preview-user", name: "Preview", modules: ["INCIDENTS"] },
+        token: null,
+        refreshToken: null,
+        residentAuth: null,
+      }),
+    );
+
+    expect(readSessionSnapshot()).toMatchObject({
+      mode: "backend",
+      apiBaseUrl: "/api",
+      resident: null,
+      user: null,
+      token: null,
+    });
   });
 
   it("keeps backend contexts visible even when residence data is partially missing", async () => {
@@ -399,7 +385,7 @@ describe("mobile-app service", () => {
     expect(readPendingActions()).toHaveLength(0);
   });
 
-  it("keeps disabled backend visitor creation local without queueing sync", async () => {
+  it("queues backend visitor creation while offline", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
@@ -419,9 +405,9 @@ describe("mobile-app service", () => {
       valid_until: "2026-03-11T23:00:00.000Z",
     });
 
-    expect(created.local_only).toBe(true);
-    expect(created.pending_sync).toBe(false);
-    expect(readPendingActions()).toHaveLength(0);
+    expect(created.local_only).toBe(false);
+    expect(created.pending_sync).toBe(true);
+    expect(readPendingActions()).toHaveLength(1);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -454,7 +440,7 @@ describe("mobile-app service", () => {
     expect(readPreviewState().visitors[0].status).toBe("CANCELLED");
   });
 
-  it("serves locally disabled resident modules from local state without backend requests", async () => {
+  it("loads visitor settings and visitors through the backend", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
@@ -469,14 +455,56 @@ describe("mobile-app service", () => {
       token: "access-token",
       refreshToken: null,
     };
-    const fetchMock = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "application/json" : null,
+        },
+        json: async () => ({
+          id: 1,
+          site_id: resident.site_id,
+          enabled: true,
+          allow_resident_creation: true,
+          max_duration_days: 1,
+          require_resident_approval: false,
+          default_profile: null,
+          default_profile_id: null,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "content-type" ? "application/json" : null,
+        },
+        json: async () => [
+          {
+            id: 501,
+            guest_name: "Visitante Backend",
+            visit_date: "2026-03-11T18:00:00.000Z",
+            valid_until: "2026-03-11T23:00:00.000Z",
+            status: "ACTIVE",
+            host: { id: resident.id, name: resident.name },
+          },
+        ],
+      });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getVisitorSettings(snapshot, "online")).resolves.toMatchObject({
       enabled: true,
     });
-    await expect(listVisitors(snapshot, "online", resident)).resolves.not.toHaveLength(0);
-    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(listVisitors(snapshot, "online", resident)).resolves.toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/resident-app/visitors/settings",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/resident-app/visitors",
+      expect.objectContaining({ method: "GET" }),
+    );
   });
 
   it("loads deliveries through the resident-app API with optional status filter", async () => {

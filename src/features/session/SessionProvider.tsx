@@ -18,7 +18,6 @@ import {
   normalizeApiBaseUrl,
   acceptAccessOsInvite,
   readPendingActions,
-  readPreviewState,
   readSessionSnapshot,
   registerAccessOsAccount,
   unregisterResidentPushSubscription,
@@ -42,7 +41,7 @@ import type {
 type SessionContextValue = {
   snapshot: SessionSnapshot;
   residents: ResidentProfile[];
-  resident: ResidentProfile;
+  resident: ResidentProfile | null;
   connectionState: ConnectionState;
   pendingActionsCount: number;
   isConnecting: boolean;
@@ -75,12 +74,12 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 function resolveResident(
   snapshot: SessionSnapshot,
   residents: ResidentProfile[],
-): ResidentProfile {
+): ResidentProfile | null {
   return (
     residents.find((item) => item.id === snapshot.resident?.id) ??
     snapshot.resident ??
     residents[0] ??
-    readPreviewState().residents[0]
+    null
   );
 }
 
@@ -104,7 +103,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     readSessionSnapshot(),
   );
   const [residents, setResidents] = useState<ResidentProfile[]>(
-    () => readPreviewState().residents,
+    () =>
+      isBackendAuthenticated(readSessionSnapshot()) && snapshot.resident
+        ? [snapshot.resident]
+        : [],
   );
   const [connectionState, setConnectionState] = useState<ConnectionState>(
     navigator.onLine ? "online" : "offline",
@@ -139,20 +141,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     let mounted = true;
 
     async function hydrateResidents() {
-      if (snapshot.mode === "preview") {
-        const previewResidents = readPreviewState().residents;
-        if (!mounted) return;
-        setResidents(previewResidents);
-        const resident = resolveResident(snapshot, previewResidents);
-        if (resident.id !== snapshot.resident?.id) {
-          const next = { ...snapshot, resident };
-          setSnapshot(next);
-          saveSessionSnapshot(next);
-        }
-        setIsHydratingSession(false);
-        return;
-      }
-
       if (!isBackendAuthenticated(snapshot)) {
         if (!mounted) return;
         setResidents([]);
@@ -207,26 +195,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   function switchMode(mode: SessionMode) {
-    if (mode === "preview") {
-      const endpoint = readStoredPushEndpoint();
-      if (endpoint && snapshot.mode === "backend") {
-        void unregisterResidentPushSubscription(snapshot, endpoint).catch(
-          () => undefined,
-        );
-      }
-      clearStoredPushRegistration();
-      disconnectBackendSession();
-      const next = {
-        ...readSessionSnapshot(),
-        mode: "preview" as const,
-      };
-      setSnapshot(next);
-      setResidents(readPreviewState().residents);
-      setPendingActionsCount(readPendingActions().length);
-      setIsHydratingSession(false);
-      return;
-    }
-
     const next = snapshot.token
       ? { ...snapshot, mode: "backend" as const }
       : buildLoggedOutBackendSnapshot(snapshot);
@@ -356,11 +324,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   async function refreshResidents() {
-    if (snapshot.mode === "preview") {
-      setResidents(readPreviewState().residents);
-      return;
-    }
-
     if (!isAuthenticated) {
       setResidents([]);
       return;

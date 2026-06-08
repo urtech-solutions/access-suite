@@ -55,7 +55,7 @@ const AuthRoute = () => {
 
 const ProtectedShell = () => {
   const location = useLocation();
-  const { snapshot, isAuthenticated, isHydratingSession } = useSession();
+  const { snapshot, resident, isAuthenticated, isHydratingSession } = useSession();
 
   if (isHydratingSession) {
     return <ScreenLoader />;
@@ -68,7 +68,7 @@ const ProtectedShell = () => {
   if (
     snapshot.mode === "backend" &&
     isAuthenticated &&
-    snapshot.residentAuth?.contexts.length === 0
+    (snapshot.residentAuth?.contexts.length === 0 || !resident)
   ) {
     return <NoAccessPage />;
   }

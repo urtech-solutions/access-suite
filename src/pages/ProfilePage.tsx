@@ -8,7 +8,6 @@ import {
   LogOut,
   RefreshCw,
   ShieldCheck,
-  UserRound,
   X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -85,7 +84,6 @@ const ProfilePage = () => {
     isAuthenticated,
     isHydratingSession,
     setApiBaseUrl,
-    switchMode,
     switchResident,
     disconnectBackend,
     refreshResidents,
@@ -326,7 +324,7 @@ const ProfilePage = () => {
             <div className="flex-1">
               <p className="text-sm font-medium text-foreground">Configurações</p>
               <p className="text-xs text-muted-foreground">
-                Modo {snapshot.mode === "preview" ? "preview" : "backend"} · URL da API
+                URL da API
               </p>
             </div>
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -373,28 +371,6 @@ const ProfilePage = () => {
             </button>
           </SheetHeader>
           <div className="space-y-5">
-            <div>
-              <Label className="text-xs text-muted-foreground">Modo do aplicativo</Label>
-              <div className="mt-2 grid grid-cols-2 gap-3 rounded-[18px] bg-muted/70 p-1.5">
-                <Button
-                  variant={snapshot.mode === "preview" ? "accent" : "ghost"}
-                  className="rounded-[14px]"
-                  onClick={() => switchMode("preview")}
-                >
-                  <UserRound className="h-4 w-4" />
-                  Preview
-                </Button>
-                <Button
-                  variant={snapshot.mode === "backend" ? "accent" : "ghost"}
-                  className="rounded-[14px]"
-                  onClick={() => switchMode("backend")}
-                >
-                  <Database className="h-4 w-4" />
-                  Backend
-                </Button>
-              </div>
-            </div>
-
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">URL da API</Label>
               <Input

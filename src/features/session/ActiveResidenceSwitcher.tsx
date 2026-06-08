@@ -137,9 +137,7 @@ export function ResidenceContextToggle({
                   : "text-muted-foreground/90",
               )}
             >
-              {snapshot.mode === "backend"
-                ? resident.tenant_name
-                : "Modo preview residencial"}
+              {resident.tenant_name}
             </p>
           </div>
 

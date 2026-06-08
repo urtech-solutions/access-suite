@@ -131,7 +131,15 @@ const AuthPage = () => {
           </p>
         </header>
 
-        <section className="rounded-[28px] border border-white/10 bg-white/[0.055] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+        <form
+          className="rounded-[28px] border border-white/10 bg-white/[0.055] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (canSubmit && !isConnecting) {
+              void submit();
+            }
+          }}
+        >
           <div className="grid grid-cols-2 gap-2 rounded-[18px] bg-black/20 p-1">
             <button
               type="button"
@@ -226,9 +234,9 @@ const AuthPage = () => {
             ) : null}
 
             <Button
+              type="submit"
               className="h-12 w-full rounded-[16px] bg-amber-400 text-base font-semibold text-slate-950 hover:bg-amber-300"
               disabled={!canSubmit || isConnecting}
-              onClick={() => void submit()}
             >
               {isConnecting
                 ? mode === "register"
@@ -240,7 +248,7 @@ const AuthPage = () => {
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
-        </section>
+        </form>
 
         <button
           type="button"

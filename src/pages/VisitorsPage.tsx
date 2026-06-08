@@ -510,9 +510,7 @@ const VisitorsPage = () => {
                 : "Os convidados se cadastram no link público e o acesso é liberado no período do convite."}
             </p>
           </div>
-          <Badge variant="info">
-            {snapshot.mode === "preview" ? "Preview" : "Módulo ativo"}
-          </Badge>
+          <Badge variant="info">Modulo ativo</Badge>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <div className="rounded-[18px] bg-muted px-3 py-2">

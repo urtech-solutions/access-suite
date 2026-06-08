@@ -10,7 +10,7 @@ import { createAccessSuiteDevApiPlugin } from "./src/dev/access-suite-dev-api";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const proxyTarget =
-    env.VITE_DEV_API_PROXY_TARGET?.trim() || "http://localhost:3000";
+    env.VITE_DEV_API_PROXY_TARGET?.trim() || "http://localhost:3333";
   const keepApiPrefix = env.VITE_DEV_API_PROXY_KEEP_PREFIX === "true";
   const appBasePath = env.VITE_APP_BASE_PATH?.trim() || "/access-os/";
   const devServerPort = Number(

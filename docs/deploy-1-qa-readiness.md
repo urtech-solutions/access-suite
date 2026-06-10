@@ -18,7 +18,7 @@ Foi considerada a stack atualmente publicada em ambiente local de validacao:
 - backend central em `:3000`
 - `Management` em `:3003`
 - `PWA-reviewed` em `:4040`
-- app mobile web (`access-suite`) em `:8088`
+- app mobile web (`access-suite`) em `:3004`
 
 O escopo funcional coberto por esta rodada foi:
 
@@ -134,7 +134,7 @@ Verificacoes realizadas:
 - `GET http://127.0.0.1:3000/push/config` -> `200`
 - `GET http://127.0.0.1:3003` -> `200`
 - `GET http://127.0.0.1:4040` -> `200`
-- `GET http://127.0.0.1:8088` -> `200`
+- `GET http://127.0.0.1:3004` -> `200`
 
 ### Realtime
 
@@ -191,7 +191,7 @@ Pendencia:
 - backend respondendo `/health` e `/push/config`
 - logs do backend com operacao de `sync/heartbeat` continua e sem erro funcional recorrente
 - logs do `Management` e do app mobile sem erros de runtime relevantes nesta rodada
-- `service worker` de push publicado em `4040` e `8088`
+- `service worker` de push publicado em `4040` e `3004`
 
 ### Pontos de atencao
 
@@ -208,7 +208,7 @@ Pendencia:
 - `EVENT_PUBLIC_BASE_URL` apontando para URL publica correta
 - `CORS_ORIGIN` cobrindo `Management`, `PWA-reviewed` e app mobile
 - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` e `VAPID_SUBJECT` definidos
-- `HTTPS` ativo para `4040` e `8088` no ambiente oficial
+- `HTTPS` ativo para `4040` e `3004` no ambiente oficial
 
 ### Configuracao por site
 

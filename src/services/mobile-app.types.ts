@@ -1,4 +1,4 @@
-export type SessionMode = "preview" | "backend";
+export type SessionMode = "backend";
 
 export type ResidentRole = "MANAGER" | "MORADOR" | "OWNER" | "SINDICO" | "SUPPORT";
 export type ResidentAppProfileType = "APP_USER" | "RESIDENT" | "SYNDIC";
@@ -32,11 +32,6 @@ export type DeliveryStatus =
   | "RESIDENT_CONFIRMED"
   | "CONTESTED";
 
-export type PendingActionType =
-  | "CREATE_VISITOR"
-  | "CREATE_INCIDENT"
-  | "CREATE_RESERVATION";
-
 export interface ResidentAppCredentials {
   email: string;
   context_key: string;
@@ -47,6 +42,7 @@ export interface ResidentAppCredentials {
 export interface AccessOsRegisterInput {
   name: string;
   email: string;
+  email_verification_code: string;
   phone_number: string;
   password: string;
 }
@@ -199,8 +195,6 @@ export interface VisitorEntry {
     } | null;
   } | null;
   pending_approval_count?: number;
-  local_only?: boolean;
-  pending_sync?: boolean;
 }
 
 export interface VisitorModuleSettings {
@@ -327,8 +321,6 @@ export interface IncidentEntry {
     id?: string | null;
     payload?: Record<string, unknown> | null;
   } | null;
-  local_only?: boolean;
-  pending_sync?: boolean;
 }
 
 export interface BulletinPost {
@@ -425,8 +417,6 @@ export interface ReservationEntry {
     max_people: number;
   } | null;
   public_link?: string | null;
-  local_only?: boolean;
-  pending_sync?: boolean;
 }
 
 export interface DeliveryEntry {
@@ -555,13 +545,6 @@ export interface ChatAttachment {
   mime_type: string;
   original_name: string;
   file_size_bytes: number;
-}
-
-export interface PendingAction {
-  id: string;
-  type: PendingActionType;
-  created_at: string;
-  payload: Record<string, unknown>;
 }
 
 export interface PreviewState {

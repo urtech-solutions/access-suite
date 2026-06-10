@@ -114,6 +114,19 @@
     overflow: hidden;
   }
 
+  html.auth-scroll-page,
+  body.auth-scroll-page {
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  body.auth-scroll-page #root {
+    height: auto;
+    min-height: 100%;
+  }
+
   h1,
   h2,
   h3 {
@@ -123,6 +136,29 @@
 }
 
 @layer utilities {
+  @keyframes auth-verify-success-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.72) rotate(-10deg);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.08) rotate(3deg);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1) rotate(0deg);
+    }
+  }
+
+  .auth-verify-success {
+    animation: auth-verify-success-pop 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .auth-verify-error {
+    animation: auth-verify-success-pop 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }

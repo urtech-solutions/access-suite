@@ -35,10 +35,7 @@ import { ResidenceContextToggle } from "@/features/session/ActiveResidenceSwitch
 import { ConnectivityPill } from "@/features/shared/ConnectivityPill";
 import { useSession } from "@/features/session/SessionProvider";
 import { formatResidentContextMeta } from "@/features/session/resident-context";
-import {
-  changeResidentPassword,
-  normalizeApiBaseUrl,
-} from "@/services/mobile-app.service";
+import { changeResidentPassword } from "@/services/mobile-app.service";
 
 function avatarStorageKey(residentId: number) {
   return `sv-mobile:avatar:${residentId}`;
@@ -83,12 +80,10 @@ const ProfilePage = () => {
     snapshot,
     isAuthenticated,
     isHydratingSession,
-    setApiBaseUrl,
     switchResident,
     disconnectBackend,
     refreshResidents,
     refreshSession,
-    syncPending,
   } = useSession();
 
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(() => {
@@ -96,7 +91,6 @@ const ProfilePage = () => {
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [apiBaseUrl, setApiBaseUrlInput] = useState(snapshot.apiBaseUrl);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
@@ -150,17 +144,6 @@ const ProfilePage = () => {
   function handleRemoveAvatar() {
     localStorage.removeItem(avatarStorageKey(resident.id));
     setAvatarDataUrl(null);
-  }
-
-  function applyApiBaseUrl() {
-    const nextApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
-    setApiBaseUrlInput(nextApiBaseUrl);
-    setApiBaseUrl(nextApiBaseUrl);
-  }
-
-  async function handleSync() {
-    await syncPending();
-    queryClient.invalidateQueries();
   }
 
   async function handleRefreshContexts() {
@@ -324,7 +307,7 @@ const ProfilePage = () => {
             <div className="flex-1">
               <p className="text-sm font-medium text-foreground">Configurações</p>
               <p className="text-xs text-muted-foreground">
-                URL da API
+                Senha da conta
               </p>
             </div>
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -371,17 +354,6 @@ const ProfilePage = () => {
             </button>
           </SheetHeader>
           <div className="space-y-5">
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">URL da API</Label>
-              <Input
-                value={apiBaseUrl}
-                onChange={(e) => setApiBaseUrlInput(e.target.value)}
-                onBlur={applyApiBaseUrl}
-                placeholder="http://localhost:3000"
-                className="h-12 rounded-[16px]"
-              />
-            </div>
-
             {snapshot.mode === "backend" && snapshot.token ? (
               <div className="space-y-2 rounded-[16px] border p-3">
                 <Label className="text-xs text-muted-foreground">
@@ -411,15 +383,6 @@ const ProfilePage = () => {
                 </Button>
               </div>
             ) : null}
-
-            <Button
-              variant="secondary"
-              className="w-full rounded-[16px]"
-              onClick={handleSync}
-            >
-              <RefreshCw className="h-4 w-4" />
-              Sincronizar fila pendente
-            </Button>
           </div>
         </SheetContent>
       </Sheet>

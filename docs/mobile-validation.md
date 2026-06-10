@@ -47,7 +47,7 @@ docker compose --env-file .env.docker up -d --build
 Depois abra no celular:
 
 ```text
-http://SEU_IP_LOCAL:8088
+http://SEU_IP_LOCAL:3004
 ```
 
 Esse `up` padrao sobe apenas o runtime do app, em build de producao, com foco no fluxo real de backend.
@@ -106,7 +106,7 @@ Quando quiser validar integracao:
 
 1. suba o backend;
 2. no backend, inclua o origin do app em `CORS_ORIGIN`:
-   - `http://SEU_IP_LOCAL:8088`
+   - `http://SEU_IP_LOCAL:3004`
    - `http://SEU_IP_LOCAL:5123`
    - `http://SEU_IP_LOCAL:8080` se tambem usar o profile `dev`
 3. recrie o backend para aplicar o `.env`;
@@ -182,7 +182,7 @@ Se quiser isolar o ambiente e evitar depender de Node local:
 
 1. `cp .env.docker.example .env.docker`
 2. `docker compose --env-file .env.docker up -d --build`
-3. abrir `http://SEU_IP_LOCAL:8088`
+3. abrir `http://SEU_IP_LOCAL:3004`
 
 Depois partimos para:
 

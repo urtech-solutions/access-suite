@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { demoResidents } from "@/data/demo-data";
 import {
-  cancelVisitor,
   confirmDelivery,
   connectBackendSession,
   contestDelivery,
@@ -32,19 +30,38 @@ import {
   lookupResidentAppAccess,
   mapResidentContextToProfile,
   normalizeApiBaseUrl,
-  readPendingActions,
-  readPreviewState,
   readSessionSnapshot,
   saveSessionSnapshot,
 } from "@/services/mobile-app.service";
 import type {
   CommonArea,
   ReservationEntry,
+  ResidentProfile,
   SessionSnapshot,
 } from "@/services/mobile-app.types";
 
 describe("mobile-app service", () => {
-  const resident = demoResidents[0];
+  const resident: ResidentProfile = {
+    id: 101,
+    context_id: 101,
+    profile_type: "RESIDENT",
+    person_id: 101,
+    user_uuid: null,
+    name: "Maria Silva",
+    email: "maria@example.com",
+    phone_number: "+5511999999999",
+    role: "MORADOR",
+    residence_block: "A",
+    residence_apartment: "101",
+    site_id: 11,
+    site_name: "Torre Azul",
+    tenant_uuid: "tenant-a",
+    tenant_name: "Condominio A",
+    unit_label: "A - 101",
+    context_label: "Condominio A - Torre Azul - A - 101",
+    avatar: "MS",
+    tag: "Apto 101",
+  };
 
   beforeEach(() => {
     localStorage.clear();
@@ -361,83 +378,37 @@ describe("mobile-app service", () => {
     );
   });
 
-  it("creates a local visitor in preview mode without queueing sync", async () => {
-    const snapshot: SessionSnapshot = {
-      mode: "preview",
-      apiBaseUrl: "http://localhost:3000",
-      resident,
-      residentAuth: null,
-      token: null,
-      refreshToken: null,
-    };
-
-    saveSessionSnapshot(snapshot);
-
-    const created = await createVisitor(snapshot, "offline", resident, {
-      guest_name: "Visitante Preview",
-      visit_date: "2026-03-10T18:00:00.000Z",
-      valid_until: "2026-03-10T23:00:00.000Z",
-    });
-
-    expect(created.guest_name).toBe("Visitante Preview");
-    expect(created.pending_sync).toBe(false);
-    expect(readPreviewState().visitors[0].guest_name).toBe("Visitante Preview");
-    expect(readPendingActions()).toHaveLength(0);
-  });
-
-  it("queues backend visitor creation while offline", async () => {
+  it("propagates backend visitor creation failures instead of queueing offline", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
       resident,
-      residentAuth: null,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: null,
+        contexts: [],
+      },
       token: "token-offline",
       refreshToken: null,
     };
 
-    saveSessionSnapshot(snapshot);
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const created = await createVisitor(snapshot, "offline", resident, {
-      guest_name: "Visitante Offline",
-      visit_date: "2026-03-11T18:00:00.000Z",
-      valid_until: "2026-03-11T23:00:00.000Z",
-    });
+    await expect(
+      createVisitor(snapshot, "offline", resident, {
+        guest_name: "Visitante Offline",
+        visit_date: "2026-03-11T18:00:00.000Z",
+        valid_until: "2026-03-11T23:00:00.000Z",
+      }),
+    ).rejects.toThrow("Não foi possível conectar à API");
 
-    expect(created.local_only).toBe(false);
-    expect(created.pending_sync).toBe(true);
-    expect(readPendingActions()).toHaveLength(1);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("cancels a preview visitor locally", async () => {
-    const snapshot: SessionSnapshot = {
-      mode: "preview",
-      apiBaseUrl: "http://localhost:3000",
-      resident,
-      residentAuth: null,
-      token: null,
-      refreshToken: null,
-    };
-
-    saveSessionSnapshot(snapshot);
-
-    const created = await createVisitor(snapshot, "offline", resident, {
-      guest_name: "Visitante Cancelável",
-      visit_date: "2026-03-11T18:00:00.000Z",
-      valid_until: "2026-03-11T23:00:00.000Z",
-    });
-
-    const cancelled = await cancelVisitor(
-      snapshot,
-      "offline",
-      resident,
-      created.id,
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/resident-app/visitors",
+      expect.objectContaining({ method: "POST" }),
     );
-
-    expect(cancelled?.status).toBe("CANCELLED");
-    expect(readPreviewState().visitors[0].status).toBe("CANCELLED");
   });
 
   it("loads visitor settings and visitors through the backend", async () => {
@@ -809,7 +780,7 @@ describe("mobile-app service", () => {
     );
   });
 
-  it("keeps backend reservations pending when offline", async () => {
+  it("propagates backend reservation creation failures instead of queueing offline", async () => {
     const snapshot: SessionSnapshot = {
       mode: "backend",
       apiBaseUrl: "http://localhost:3000",
@@ -827,17 +798,15 @@ describe("mobile-app service", () => {
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
 
-    const created = await createReservation(snapshot, "offline", resident, [], {
-      area_id: 101,
-      event_name: "Churrasco",
-      guest_count: 12,
-      reserved_from: "2026-03-22T16:00:00",
-      reserved_until: "2026-03-22T20:00:00",
-    });
-
-    expect(created.local_only).toBe(false);
-    expect(created.pending_sync).toBe(true);
-    expect(readPendingActions()).toHaveLength(1);
+    await expect(
+      createReservation(snapshot, "offline", resident, [], {
+        area_id: 101,
+        event_name: "Churrasco",
+        guest_count: 12,
+        reserved_from: "2026-03-22T16:00:00",
+        reserved_until: "2026-03-22T20:00:00",
+      }),
+    ).rejects.toThrow("Não foi possível conectar à API");
   });
 
   it("disconnects locally without calling removed resident app endpoints", () => {

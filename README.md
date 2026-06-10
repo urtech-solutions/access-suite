@@ -55,7 +55,7 @@ docker compose --env-file .env.docker up -d --build
 App em:
 
 ```text
-http://SEU_IP_LOCAL:8088
+http://SEU_IP_LOCAL:3004
 ```
 
 Esse fluxo sobe apenas o runtime do app, em build de producao, apontando para o backend real configurado em `VITE_API_URL`.

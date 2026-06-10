@@ -4,7 +4,6 @@ import basicSsl from "@vitejs/plugin-basic-ssl";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
-import { createAccessSuiteDevApiPlugin } from "./src/dev/access-suite-dev-api";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -14,11 +13,10 @@ export default defineConfig(({ mode }) => {
   const keepApiPrefix = env.VITE_DEV_API_PROXY_KEEP_PREFIX === "true";
   const appBasePath = env.VITE_APP_BASE_PATH?.trim() || "/access-os/";
   const devServerPort = Number(
-    env.VITE_DEV_SERVER_PORT || env.ACCESS_SUITE_DEV_PORT || 8088,
+    env.VITE_DEV_SERVER_PORT || env.ACCESS_SUITE_DEV_PORT || 3004,
   );
   const devServerHost = env.VITE_DEV_SERVER_HOST?.trim() || "0.0.0.0";
   const devHttpsEnabled = env.VITE_DEV_HTTPS === "true";
-  const devApiMockEnabled = env.VITE_DEV_API_MOCK === "true";
   const devHttpsPfxPath = env.VITE_DEV_HTTPS_PFX
     ? path.resolve(process.cwd(), env.VITE_DEV_HTTPS_PFX)
     : "";
@@ -69,7 +67,6 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [
-      devApiMockEnabled && createAccessSuiteDevApiPlugin("/api"),
       react(),
       devHttpsEnabled && !devHttps && basicSsl(),
       mode === "development" && componentTagger(),

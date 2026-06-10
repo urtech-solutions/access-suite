@@ -25,7 +25,6 @@ import type {
   IncidentModuleSettings,
   IncidentParticipantOption,
   IncidentTopic,
-  PendingAction,
   ResidentAppContext,
   ResidentAppCredentials,
   ResidentAppLookupResult,
@@ -45,7 +44,6 @@ import type {
 
 const SESSION_KEY = "sv-mobile:session";
 const PREVIEW_STATE_KEY = "sv-mobile:preview-state";
-const PENDING_ACTIONS_KEY = "sv-mobile:pending-actions";
 const CACHE_PREFIX = "sv-mobile:cache:";
 export const INCIDENTS_MODULE_KEY = "INCIDENTS";
 export const BULLETIN_MODULE_KEY = "BULLETIN";
@@ -871,16 +869,13 @@ export function readSessionSnapshot(): SessionSnapshot {
   );
 
   if (snapshot.mode !== "backend") {
-    return {
-      ...getDefaultSessionSnapshot(),
-      apiBaseUrl: normalizeApiBaseUrl(snapshot.apiBaseUrl),
-    };
+    return getDefaultSessionSnapshot();
   }
 
   return {
     ...snapshot,
     mode: "backend",
-    apiBaseUrl: normalizeApiBaseUrl(snapshot.apiBaseUrl),
+    apiBaseUrl: normalizeApiBaseUrl(DEFAULT_API_BASE_URL),
     user: normalizeResidentAppUser(snapshot.user),
   };
 }
@@ -889,7 +884,7 @@ export function saveSessionSnapshot(snapshot: SessionSnapshot) {
   writeStorage(SESSION_KEY, {
     ...snapshot,
     mode: "backend",
-    apiBaseUrl: normalizeApiBaseUrl(snapshot.apiBaseUrl),
+    apiBaseUrl: normalizeApiBaseUrl(DEFAULT_API_BASE_URL),
     user: normalizeResidentAppUser(snapshot.user),
   });
 }
@@ -898,7 +893,7 @@ export function resetSessionSnapshot() {
   removeStorage(SESSION_KEY);
 }
 
-export function readPreviewState() {
+function readPreviewState() {
   return readStorage<PreviewState>(PREVIEW_STATE_KEY, {
     residents: [],
     visitors: [],
@@ -911,25 +906,8 @@ export function readPreviewState() {
   });
 }
 
-export function savePreviewState(state: PreviewState) {
+function savePreviewState(state: PreviewState) {
   writeStorage(PREVIEW_STATE_KEY, state);
-}
-
-export function readPendingActions() {
-  return readStorage<PendingAction[]>(PENDING_ACTIONS_KEY, []);
-}
-
-export function savePendingActions(actions: PendingAction[]) {
-  writeStorage(PENDING_ACTIONS_KEY, actions);
-}
-
-function appendPendingAction(action: PendingAction) {
-  const current = readPendingActions();
-  savePendingActions([action, ...current]);
-}
-
-function removePendingAction(id: string) {
-  savePendingActions(readPendingActions().filter((action) => action.id !== id));
 }
 
 function upsertPreviewState<
@@ -948,34 +926,30 @@ function upsertPreviewState<
 }
 
 function readResidentScopedFallback<T>(name: string, fallback: T): T {
-  return readCache<T>(name, fallback);
+  void name;
+  void fallback;
+  throw new Error("Esta operação exige conexão com o backend.");
 }
 
 function isOnlineBackend(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
 ) {
+  void connectionState;
   return (
     snapshot.mode === "backend" &&
-    connectionState === "online" &&
     Boolean(snapshot.token) &&
     Boolean(snapshot.residentAuth?.account_uuid)
   );
 }
 
 function canAttemptBackendRequest(snapshot: SessionSnapshot) {
-  return (
-    snapshot.mode === "backend" &&
-    Boolean(snapshot.token) &&
-    Boolean(snapshot.residentAuth?.account_uuid)
-  );
+  return snapshot.mode === "backend";
 }
 
 function isApiConnectionError(error: unknown) {
-  return (
-    error instanceof Error &&
-    error.message.startsWith("Não foi possível conectar à API em ")
-  );
+  void error;
+  return false;
 }
 
 export function isBackendAuthenticated(snapshot: SessionSnapshot) {
@@ -1034,6 +1008,20 @@ export async function registerAccessOsAccount(
   );
 
   return createBackendSnapshot(response, baseUrl);
+}
+
+export async function requestAccessOsRegisterCode(
+  email: string,
+  baseUrl?: string,
+) {
+  return requestJson<{ success: boolean; expires_in_minutes: number }>(
+    "/auth/access-os/register/request-code",
+    {
+      baseUrl,
+      method: "POST",
+      body: { email },
+    },
+  );
 }
 
 export async function acceptAccessOsInvite(
@@ -1265,8 +1253,6 @@ export async function createVisitor(
     notes: input.notes ?? null,
     host: { id: resident.id, name: resident.name },
     profile: { id: 1, name: "Visitante Diário", color: "#D97706" },
-    local_only: snapshot.mode === "preview" || requestsDisabled,
-    pending_sync: snapshot.mode === "backend" && !requestsDisabled,
   };
 
   const next = upsertPreviewState("visitors", (visitors) => [
@@ -1278,18 +1264,6 @@ export async function createVisitor(
     next.filter((visitor) => visitor.host?.id === resident.id),
   );
 
-  if (snapshot.mode === "backend" && !requestsDisabled) {
-    appendPendingAction({
-      id: `pending-visitor-${localVisitor.id}`,
-      type: "CREATE_VISITOR",
-      created_at: new Date().toISOString(),
-      payload: {
-        resident_id: resident.id,
-        visitor: input,
-      },
-    });
-  }
-
   return localVisitor;
 }
 
@@ -1299,7 +1273,8 @@ export async function rotateVisitorLink(
   resident: ResidentProfile,
   visitorId: number,
 ) {
-  ensureResidentWriteAccess(resident, "A rotação de links de convites");
+  ensureResidentWriteAccess(resident, "A rotação de links de convites");
+
   if (!isOnlineBackend(snapshot, connectionState)) {
     throw new Error(
       "A rotação do link do convite exige conexão com o backend.",
@@ -1335,7 +1310,8 @@ async function resolveVisitorDecision(
   ensureResidentWriteAccess(
     resident,
     action === "approve" ? "A aprovação de convites" : "A rejeição de convites",
-  );
+  );
+
   if (!isOnlineBackend(snapshot, connectionState)) {
     throw new Error(
       "A validação do convidado exige conexão com o backend.",
@@ -1395,7 +1371,6 @@ export async function cancelVisitor(
       ...visitor,
       status: "CANCELLED",
       invitation_status: "CANCELLED",
-      pending_sync: false,
     }));
   }
 
@@ -2190,7 +2165,6 @@ export async function createIncident(
         actor_label: resident.name,
         metadata: {
           topic_id: input.topic_id,
-          pending_sync: snapshot.mode === "backend",
         },
         created_at: now,
       },
@@ -2200,8 +2174,6 @@ export async function createIncident(
       id: externalId,
       payload: input.payload ?? null,
     },
-    local_only: snapshot.mode === "preview",
-    pending_sync: snapshot.mode === "backend",
   };
 
   upsertPreviewIncident(resident, localIncident);
@@ -2211,27 +2183,7 @@ export async function createIncident(
       throw new Error("Incidentes com anexo precisam ser enviados online para garantir o upload.");
     }
 
-    appendPendingAction({
-      id: `pending-incident-${localIncident.id}`,
-      type: "CREATE_INCIDENT",
-      created_at: now,
-      payload: {
-        resident_id: resident.id,
-        incident: {
-          external_id: externalId,
-          site_id: siteId,
-          person_id: requesterPersonId,
-          title: input.title.trim(),
-          description: input.description.trim(),
-          topic_id: input.topic_id,
-          topic_label: input.topic_label,
-          occurred_at: input.occurred_at,
-          requester_name: requester.name,
-          requester_unit_label: requester.unit_label ?? null,
-          payload: input.payload ?? null,
-        },
-      },
-    });
+    throw new Error("A criação de incidentes exige conexão com o backend.");
   }
 
   return localIncident;
@@ -2757,8 +2709,6 @@ export async function createReservation(
     },
     person: { id: resident.id, name: resident.name },
     public_link: null,
-    local_only: snapshot.mode === "preview" || requestsDisabled,
-    pending_sync: snapshot.mode === "backend" && !requestsDisabled,
   };
 
   if (localReservation.public_link) {
@@ -2770,22 +2720,6 @@ export async function createReservation(
     ...reservations,
   ]);
   writeCache(`reservations:${resident.id}`, next);
-
-  if (snapshot.mode === "backend" && !requestsDisabled) {
-    appendPendingAction({
-      id: `pending-reservation-${localReservation.id}`,
-      type: "CREATE_RESERVATION",
-      created_at: new Date().toISOString(),
-      payload: {
-        resident_id: resident.id,
-        reservation: {
-          ...input,
-          reserved_from: normalizeLocalDateTime(input.reserved_from),
-          reserved_until: normalizeLocalDateTime(input.reserved_until),
-        },
-      },
-    });
-  }
 
   return localReservation;
 }
@@ -2823,7 +2757,8 @@ export async function rotateReservationLink(
     );
     writeCache(`reservations:${resident.id}`, next);
     return rotated;
-  }
+  }
+
   throw new Error("A rotacao do link da reserva exige conexao com o backend.");
 }
 
@@ -3609,7 +3544,8 @@ export async function sendDirectChatMessage(
         throw error;
       }
     }
-  }
+  }
+
   throw new Error("O envio de mensagens exige conexao com o backend.");
 }
 
@@ -3688,7 +3624,8 @@ export async function sendPortariaChatMessage(
         throw error;
       }
     }
-  }
+  }
+
   throw new Error("O envio de mensagens para a portaria exige conexao com o backend.");
 }
 
@@ -4070,100 +4007,3 @@ function upsertChatThreadInCache(residentId: number, incoming: ChatThread) {
   return next;
 }
 
-export async function syncPendingActions(
-  snapshot: SessionSnapshot,
-  connectionState: ConnectionState,
-) {
-  if (!isOnlineBackend(snapshot, connectionState)) {
-    return { synced: 0, failed: readPendingActions().length };
-  }
-
-  const actions = readPendingActions();
-  let synced = 0;
-  let failed = 0;
-
-  for (const action of actions) {
-    const residentId = Number(
-      (action.payload as { resident_id?: unknown }).resident_id ?? 0,
-    );
-
-    if (residentId > 0 && residentId !== snapshot.resident?.id) {
-      failed += 1;
-      continue;
-    }
-
-    if (
-      (action.type === "CREATE_VISITOR" &&
-        isResidentAppModuleRequestDisabled(VISITORS_MODULE_KEY)) ||
-      (action.type === "CREATE_RESERVATION" &&
-        isResidentAppModuleRequestDisabled(RESERVATIONS_MODULE_KEY))
-    ) {
-      removePendingAction(action.id);
-      continue;
-    }
-
-    try {
-      if (action.type === "CREATE_VISITOR") {
-        const payload = action.payload as {
-          visitor: CreateVisitorInput;
-        };
-        await requestJson("/resident-app/visitors", {
-          baseUrl: snapshot.apiBaseUrl,
-          token: snapshot.token,
-          method: "POST",
-          body: payload.visitor,
-        });
-      }
-
-      if (action.type === "CREATE_INCIDENT") {
-        const payload = action.payload as {
-          incident: CreateIncidentInput;
-        };
-        if (!snapshot.resident) {
-          throw new Error("Sessão sem contexto ativo para sincronizar incidente.");
-        }
-        const incident = payload.incident;
-        const siteId = incident.site_id ?? snapshot.resident.site_id;
-        const residentPersonId =
-          snapshot.resident.person_id ??
-          (snapshot.resident.role === "SINDICO" ? null : snapshot.resident.id);
-        const requesterPersonId = incident.person_id ?? residentPersonId;
-        const externalId =
-          cleanOptionalString(incident.external_id) ??
-          generateAccessOsIncidentExternalId();
-        await requestJson(ACCESS_OS_INCIDENTS_INTEGRATION_PATH, {
-          baseUrl: snapshot.apiBaseUrl,
-          token: snapshot.token,
-          method: "POST",
-          body: buildAccessOsIncidentPayload(
-            snapshot.resident,
-            incident,
-            externalId,
-            siteId,
-            requesterPersonId,
-            residentPersonId,
-          ),
-        });
-      }
-
-      if (action.type === "CREATE_RESERVATION") {
-        const payload = action.payload as {
-          reservation: CreateReservationInput;
-        };
-        await requestJson("/resident-app/reservations", {
-          baseUrl: snapshot.apiBaseUrl,
-          token: snapshot.token,
-          method: "POST",
-          body: buildReservationCreatePayload(payload.reservation),
-        });
-      }
-
-      removePendingAction(action.id);
-      synced += 1;
-    } catch {
-      failed += 1;
-    }
-  }
-
-  return { synced, failed };
-}

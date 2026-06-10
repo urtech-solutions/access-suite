@@ -14,15 +14,11 @@ import {
   hydrateBackendSession,
   isBackendAuthenticated,
   loadBackendResidents,
-  lookupResidentAppAccess,
-  normalizeApiBaseUrl,
   acceptAccessOsInvite,
-  readPendingActions,
   readSessionSnapshot,
   registerAccessOsAccount,
   unregisterResidentPushSubscription,
   saveSessionSnapshot,
-  syncPendingActions,
 } from "@/services/mobile-app.service";
 import {
   clearStoredPushRegistration,
@@ -32,9 +28,7 @@ import type {
   ConnectionState,
   AccessOsRegisterInput,
   ResidentAppCredentials,
-  ResidentAppLookupResult,
   ResidentProfile,
-  SessionMode,
   SessionSnapshot,
 } from "@/services/mobile-app.types";
 
@@ -43,30 +37,16 @@ type SessionContextValue = {
   residents: ResidentProfile[];
   resident: ResidentProfile | null;
   connectionState: ConnectionState;
-  pendingActionsCount: number;
   isConnecting: boolean;
   isHydratingSession: boolean;
   isAuthenticated: boolean;
-  setApiBaseUrl: (value: string) => void;
-  switchMode: (mode: SessionMode) => void;
   switchResident: (residentId: number) => Promise<void>;
-  lookupAccess: (
-    cpf: string,
-    baseUrl?: string,
-  ) => Promise<ResidentAppLookupResult>;
-  connectBackend: (
-    credentials: ResidentAppCredentials,
-    baseUrl?: string,
-  ) => Promise<SessionSnapshot>;
-  registerAccessOs: (
-    payload: AccessOsRegisterInput,
-    baseUrl?: string,
-  ) => Promise<SessionSnapshot>;
+  connectBackend: (credentials: ResidentAppCredentials) => Promise<SessionSnapshot>;
+  registerAccessOs: (payload: AccessOsRegisterInput) => Promise<SessionSnapshot>;
   acceptAccessOsInvite: (token: string) => Promise<SessionSnapshot>;
   disconnectBackend: () => void;
   refreshResidents: () => Promise<void>;
   refreshSession: () => Promise<void>;
-  syncPending: () => Promise<{ synced: number; failed: number }>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -83,13 +63,10 @@ function resolveResident(
   );
 }
 
-function buildLoggedOutBackendSnapshot(
-  current: SessionSnapshot,
-): SessionSnapshot {
+function buildLoggedOutBackendSnapshot(): SessionSnapshot {
   return {
     ...getDefaultSessionSnapshot(),
     mode: "backend",
-    apiBaseUrl: current.apiBaseUrl,
     user: null,
     resident: null,
     residentAuth: null,
@@ -111,9 +88,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [connectionState, setConnectionState] = useState<ConnectionState>(
     navigator.onLine ? "online" : "offline",
   );
-  const [pendingActionsCount, setPendingActionsCount] = useState(
-    readPendingActions().length,
-  );
   const [isConnecting, setIsConnecting] = useState(false);
   const [isHydratingSession, setIsHydratingSession] = useState(
     snapshot.mode === "backend" && Boolean(snapshot.token),
@@ -122,7 +96,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     function handleOnline() {
       setConnectionState("online");
-      setPendingActionsCount(readPendingActions().length);
     }
 
     function handleOffline() {
@@ -165,7 +138,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setResidents(backendResidents);
       } catch (error) {
         if (!mounted) return;
-        const next = buildLoggedOutBackendSnapshot(snapshot);
+        const next = buildLoggedOutBackendSnapshot();
         setSnapshot(next);
         saveSessionSnapshot(next);
         setResidents([]);
@@ -188,22 +161,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const resident = resolveResident(snapshot, residents);
   const isAuthenticated = isBackendAuthenticated(snapshot);
 
-  function setApiBaseUrl(value: string) {
-    const next = { ...snapshot, apiBaseUrl: normalizeApiBaseUrl(value) };
-    setSnapshot(next);
-    saveSessionSnapshot(next);
-  }
-
-  function switchMode(mode: SessionMode) {
-    const next = snapshot.token
-      ? { ...snapshot, mode: "backend" as const }
-      : buildLoggedOutBackendSnapshot(snapshot);
-    setSnapshot(next);
-    saveSessionSnapshot(next);
-    setResidents(isBackendAuthenticated(next) ? residents : []);
-    setIsHydratingSession(isBackendAuthenticated(next));
-  }
-
   async function switchResident(residentId: number) {
     if (snapshot.mode === "backend" && isAuthenticated) {
       if (snapshot.resident?.id === residentId) {
@@ -222,31 +179,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     saveSessionSnapshot(next);
   }
 
-  async function lookupAccess(cpf: string, baseUrl?: string) {
+  async function connectBackend(credentials: ResidentAppCredentials) {
     setIsConnecting(true);
     try {
-      return await lookupResidentAppAccess(
-        cpf,
-        normalizeApiBaseUrl(baseUrl ?? snapshot.apiBaseUrl),
-      );
-    } finally {
-      setIsConnecting(false);
-    }
-  }
-
-  async function connectBackend(
-    credentials: ResidentAppCredentials,
-    baseUrl?: string,
-  ) {
-    setIsConnecting(true);
-    try {
-      const next = await connectBackendSession(
-        credentials,
-        normalizeApiBaseUrl(baseUrl ?? snapshot.apiBaseUrl),
-      );
+      const next = await connectBackendSession(credentials);
       setSnapshot(next);
       setResidents(await loadBackendResidents(next));
-      toast.success("Sessão do app conectada.");
       return next;
     } catch (error) {
       const message =
@@ -260,26 +198,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function registerAccessOs(
-    payload: AccessOsRegisterInput,
-    baseUrl?: string,
-  ) {
+  async function registerAccessOs(payload: AccessOsRegisterInput) {
     setIsConnecting(true);
     try {
-      const next = await registerAccessOsAccount(
-        payload,
-        normalizeApiBaseUrl(baseUrl ?? snapshot.apiBaseUrl),
-      );
+      const next = await registerAccessOsAccount(payload);
       setSnapshot(next);
       setResidents(await loadBackendResidents(next));
       toast.success("Conta AccessOS criada.");
       return next;
     } catch (error) {
-      const message =
-        error instanceof Error && error.message.trim().length > 0
-          ? error.message
-          : "Falha ao criar conta AccessOS.";
-      toast.error(message);
       throw error;
     } finally {
       setIsConnecting(false);
@@ -314,13 +241,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       );
     }
     clearStoredPushRegistration();
-    const next = buildLoggedOutBackendSnapshot(snapshot);
+    const next = buildLoggedOutBackendSnapshot();
     setSnapshot(next);
     saveSessionSnapshot(next);
     setResidents([]);
-    setPendingActionsCount(readPendingActions().length);
     setIsHydratingSession(false);
-    toast.message("Sessão backend encerrada.");
   }
 
   async function refreshResidents() {
@@ -344,18 +269,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setResidents(await loadBackendResidents(next));
   }
 
-  async function syncPending() {
-    const result = await syncPendingActions(snapshot, connectionState);
-    setPendingActionsCount(readPendingActions().length);
-    if (result.synced > 0) {
-      toast.success(`${result.synced} ação(ões) sincronizadas.`);
-    }
-    if (result.failed > 0) {
-      toast.error(`${result.failed} ação(ões) ainda pendentes.`);
-    }
-    return result;
-  }
-
   return (
     <SessionContext.Provider
       value={{
@@ -363,21 +276,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         residents,
         resident,
         connectionState,
-        pendingActionsCount,
         isConnecting,
         isHydratingSession,
         isAuthenticated,
-        setApiBaseUrl,
-        switchMode,
         switchResident,
-        lookupAccess,
         connectBackend,
         registerAccessOs,
         acceptAccessOsInvite: acceptInvite,
         disconnectBackend,
         refreshResidents,
         refreshSession,
-        syncPending,
       }}
     >
       {children}

@@ -494,17 +494,11 @@ const CommonAreasPage = () => {
       );
     },
     onSuccess: (created) => {
-      if (created.pending_sync) {
-        toast.message("Reserva salva localmente e aguardando sincronização.");
-      } else if (created.local_only) {
-        toast.success("Reserva criada em modo de demonstração.");
-      } else {
-        toast.success(
-          created.status === "PENDING_APPROVAL"
-            ? "Solicitação enviada para aprovação."
-            : "Reserva confirmada com link pronto para convidados.",
-        );
-      }
+      toast.success(
+        created.status === "PENDING_APPROVAL"
+          ? "Solicitação enviada para aprovação."
+          : "Reserva confirmada com link pronto para convidados.",
+      );
       setDialogOpen(false);
       setSelectedAreaId("");
       setEventName("");
@@ -711,7 +705,7 @@ const CommonAreasPage = () => {
   };
 
   const ensureReservationLink = async (reservation: ReservationEntry) => {
-    if (reservation.public_link || snapshot.mode === "preview") {
+    if (reservation.public_link) {
       return {
         reservation,
         generatedNow: false,
@@ -1679,8 +1673,7 @@ const CommonAreasPage = () => {
             );
           const linkActionsEnabled =
             canCreateReservation &&
-            reservation.status === "CONFIRMED" &&
-            !reservation.pending_sync;
+            reservation.status === "CONFIRMED";
 
           return (
             <motion.div
@@ -1775,9 +1768,7 @@ const CommonAreasPage = () => {
                     Link dos convidados
                   </p>
                   <p className="mt-1 truncate text-xs text-muted-foreground">
-                    {reservation.pending_sync
-                      ? "Link disponível após sincronização com a central."
-                      : reservation.status === "CONFIRMED"
+                    {reservation.status === "CONFIRMED"
                         ? reservation.public_link
                           ? reservation.public_link.replace(/^https?:\/\//, "")
                           : "Toque em compartilhar para gerar ou renovar o link."
@@ -1829,12 +1820,6 @@ const CommonAreasPage = () => {
                   </Button>
                 </div>
               </div>
-
-              {reservation.pending_sync ? (
-                <div className="mt-4 rounded-[16px] bg-warning/10 px-3 py-2 text-xs text-warning">
-                  Reserva registrada localmente e aguardando sincronização.
-                </div>
-              ) : null}
             </motion.div>
           );
         })}

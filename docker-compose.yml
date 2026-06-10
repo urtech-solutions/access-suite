@@ -3,7 +3,7 @@
 # =============================================================================
 # Padrao:
 #   docker compose up -d --build
-#   # App runtime disponivel em http://SEU_IP_LOCAL:${ACCESS_SUITE_PORT:-8088}${VITE_APP_BASE_PATH:-/access-os/}
+#   # App runtime disponivel em http://SEU_IP_LOCAL:${ACCESS_SUITE_PORT:-3004}${VITE_APP_BASE_PATH:-/access-os/}
 #   # Configurado para refletir o ambiente real do app (modo backend)
 #
 # Desenvolvimento com hot reload:
@@ -29,7 +29,7 @@ services:
     image: accessos/access-suite:runtime
     restart: unless-stopped
     ports:
-      - '${ACCESS_SUITE_PORT:-8088}:80'
+      - '${ACCESS_SUITE_PORT:-3004}:80'
     healthcheck:
       test: ['CMD', 'wget', '-qO', '/dev/null', 'http://127.0.0.1/']
       interval: 30s

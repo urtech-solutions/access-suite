@@ -518,11 +518,6 @@ function IncidentsContent() {
                 <Badge className="border-white/15 bg-white/10 text-white">
                   {renderTopicLabel(selectedIncident.topic, selectedIncident.category)}
                 </Badge>
-                {selectedIncident.pending_sync ? (
-                  <Badge className="border-amber-300/30 bg-amber-300/10 text-amber-100">
-                    Aguardando sincronização
-                  </Badge>
-                ) : null}
               </div>
 
               <h1 className="mt-3 text-2xl font-extrabold leading-tight tracking-tight">
@@ -918,9 +913,6 @@ function IncidentsContent() {
                         <Badge variant="outline">
                           {renderTopicLabel(incident.topic, incident.category)}
                         </Badge>
-                        {incident.pending_sync ? (
-                          <Badge variant="warning">Pendente</Badge>
-                        ) : null}
                       </div>
 
                       <p className="mt-3 text-base font-semibold text-foreground">

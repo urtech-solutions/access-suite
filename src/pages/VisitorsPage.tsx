@@ -271,7 +271,7 @@ const VisitorsPage = () => {
   }
 
   async function ensureVisitorLink(visitor: VisitorEntry) {
-    if (visitor.public_link || snapshot.mode === "preview") {
+    if (visitor.public_link) {
       return {
         invitation: visitor,
         generatedNow: false,
@@ -620,7 +620,6 @@ const VisitorsPage = () => {
             visitor.current_registration?.status === "PENDING_APPROVAL";
           const canCancel =
             canCreateVisitors &&
-            !visitor.pending_sync &&
             ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(visitor.status);
 
           return (
@@ -637,7 +636,6 @@ const VisitorsPage = () => {
                     <p className="truncate text-base font-semibold text-foreground">
                       {visitor.guest_name}
                     </p>
-                    {visitor.pending_sync ? <Badge variant="warning">Pendente</Badge> : null}
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {formatVisitDate(visitor.visit_date)} · válido até {formatVisitDate(visitor.valid_until)}

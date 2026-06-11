@@ -1,4 +1,5 @@
 import { createContext } from "react";
+import type { RefObject } from "react";
 
 export type ChatCallReadyPayload = {
   actor_kind: "PERSON_APP" | string;
@@ -51,10 +52,14 @@ export type ChatCallsContextValue = {
   readyPayload: ChatCallReadyPayload | null;
   currentCall: ActiveChatCall | null;
   canUseCalls: boolean;
-  startPortariaCall: (conversationUuid: string) => Promise<void>;
-  acceptCurrentCall: () => Promise<void>;
+  videoEnabled: boolean;
+  localVideoRef: RefObject<HTMLVideoElement | null>;
+  remoteVideoRef: RefObject<HTMLVideoElement | null>;
+  startPortariaCall: (conversationUuid: string, withVideo?: boolean) => Promise<void>;
+  acceptCurrentCall: (withVideo?: boolean) => Promise<void>;
   rejectCurrentCall: () => void;
   endCurrentCall: (reason?: string) => void;
+  toggleVideo: () => Promise<void>;
 };
 
 export const ChatCallsContext = createContext<ChatCallsContextValue | null>(null);

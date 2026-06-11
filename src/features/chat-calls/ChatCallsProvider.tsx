@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { io, type Socket } from "socket.io-client";
-import { Mic, Phone, PhoneIncoming, PhoneOff, WifiOff } from "lucide-react";
+import { Mic, Phone, PhoneIncoming, PhoneOff, Video, VideoOff, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,10 @@ import {
   CHAT_MODULE_KEY,
   sessionHasModule,
 } from "@/services/mobile-app.service";
+
+type IceServer = { urls: string | string[]; username?: string; credential?: string };
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const ICE_REFRESH_MARGIN_MS = 30_000;
 
 type ChatCallSdpPayload = ChatCallSignalPayload & {
   sdp: RTCSessionDescriptionInit;
@@ -64,9 +68,10 @@ function isSameCall(active: ActiveChatCall | null, callUuid?: string | null) {
   return getCallUuid(active) === callUuid;
 }
 
-function getPeerConnectionConfig(): RTCConfiguration {
+function getPeerConnectionConfig(iceServers?: IceServer[]): RTCConfiguration {
   return {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    iceServers: iceServers?.length ? iceServers : [{ urls: "stun:stun.l.google.com:19302" }],
+    iceCandidatePoolSize: 10,
   };
 }
 
@@ -77,10 +82,19 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentCallRef = useRef<ActiveChatCall | null>(null);
+  const iceServersRef = useRef<IceServer[]>([]);
+  const iceExpiresAtRef = useRef<number>(0);
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const socketBaseUrl = useMemo(
     () => resolveSocketBaseUrl(snapshot.apiBaseUrl),
+    [snapshot.apiBaseUrl],
+  );
+  const apiBaseUrl = useMemo(
+    () => snapshot.apiBaseUrl ?? "",
     [snapshot.apiBaseUrl],
   );
 
@@ -89,6 +103,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
   const [socketError, setSocketError] = useState("");
   const [readyPayload, setReadyPayload] = useState<ChatCallReadyPayload | null>(null);
   const [currentCall, setCurrentCall] = useState<ActiveChatCall | null>(null);
+  const [videoEnabled, setVideoEnabled] = useState(false);
 
   const canUseCalls =
     hasChatModule &&
@@ -104,7 +119,47 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     setCurrentCall(next);
   }, []);
 
+  const fetchIceServers = useCallback(async () => {
+    if (Date.now() < iceExpiresAtRef.current - ICE_REFRESH_MARGIN_MS) return;
+    try {
+      const resolvedBase = apiBaseUrl.replace(/\/api\/?$/, "") || window.location.origin;
+      const url = `${resolvedBase}/api/chat/calls/ice-servers`;
+      const res = await fetch(url, {
+        headers: snapshot.token
+          ? { Authorization: `Bearer ${snapshot.token}` }
+          : {},
+      });
+      if (res.ok) {
+        const json = await res.json() as { ice_servers?: IceServer[]; ttl_seconds?: number };
+        if (Array.isArray(json.ice_servers) && json.ice_servers.length > 0) {
+          iceServersRef.current = json.ice_servers;
+          iceExpiresAtRef.current = Date.now() + (json.ttl_seconds ?? 600) * 1000;
+        }
+      }
+    } catch {
+      // Falls back to default STUN in getPeerConnectionConfig
+    }
+  }, [apiBaseUrl, snapshot.token]);
+
+  const startHeartbeat = useCallback((callUuid: string) => {
+    if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+    heartbeatTimerRef.current = setInterval(() => {
+      const socket = socketRef.current;
+      if (socket?.connected) {
+        socket.emit("chat:call:heartbeat", { call_uuid: callUuid });
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }, []);
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatTimerRef.current) {
+      clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
+  }, []);
+
   const closePeer = useCallback(() => {
+    stopHeartbeat();
     peerRef.current?.getSenders().forEach((sender) => {
       sender.track?.stop();
     });
@@ -113,11 +168,18 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
 
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
+    setVideoEnabled(false);
 
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = null;
     }
-  }, []);
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+  }, [stopHeartbeat]);
 
   const emitCallEvent = useCallback(
     (eventName: string, payload: Record<string, unknown>) => {
@@ -150,26 +212,53 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     [emitCallEvent, updateCurrentCall],
   );
 
-  const ensureLocalStream = useCallback(async () => {
-    if (localStreamRef.current) return localStreamRef.current;
+  const ensureLocalStream = useCallback(async (withVideo = false) => {
+    if (localStreamRef.current) {
+      if (withVideo && !localStreamRef.current.getVideoTracks().length) {
+        try {
+          const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          videoStream.getVideoTracks().forEach((t) => {
+            localStreamRef.current!.addTrack(t);
+            peerRef.current?.addTrack(t, localStreamRef.current!);
+          });
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = localStreamRef.current;
+            void localVideoRef.current.play().catch(() => undefined);
+          }
+          setVideoEnabled(true);
+        } catch {
+          // Video unavailable — continue with audio only
+        }
+      }
+      return localStreamRef.current;
+    }
+
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("Este navegador não permite capturar áudio para a chamada.");
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: true,
-      video: false,
+      video: withVideo,
     });
     localStreamRef.current = stream;
+    if (withVideo && stream.getVideoTracks().length > 0) {
+      setVideoEnabled(true);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        void localVideoRef.current.play().catch(() => undefined);
+      }
+    }
     return stream;
   }, []);
 
   const ensurePeer = useCallback(
-    async (callUuid: string) => {
+    async (callUuid: string, withVideo = false) => {
       if (peerRef.current) return peerRef.current;
 
-      const stream = await ensureLocalStream();
-      const peer = new RTCPeerConnection(getPeerConnectionConfig());
+      await fetchIceServers();
+      const stream = await ensureLocalStream(withVideo);
+      const peer = new RTCPeerConnection(getPeerConnectionConfig(iceServersRef.current));
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
 
       peer.onicecandidate = (event) => {
@@ -183,10 +272,17 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
 
       peer.ontrack = (event) => {
         const [remoteStream] = event.streams;
-        if (remoteAudioRef.current && remoteStream) {
+        if (!remoteStream) return;
+
+        const hasVideo = remoteStream.getVideoTracks().length > 0;
+        if (hasVideo && remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStream;
+          void remoteVideoRef.current.play().catch(() => undefined);
+        } else if (remoteAudioRef.current) {
           remoteAudioRef.current.srcObject = remoteStream;
           void remoteAudioRef.current.play().catch(() => undefined);
         }
+
         const active = currentCallRef.current;
         if (active && getCallUuid(active) === callUuid) {
           updateCurrentCall({ ...active, phase: "active" });
@@ -197,6 +293,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
         if (peer.connectionState === "connected") {
           const active = currentCallRef.current;
           if (active && getCallUuid(active) === callUuid) {
+            startHeartbeat(callUuid);
             updateCurrentCall({ ...active, phase: "active" });
           }
         }
@@ -205,7 +302,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       peerRef.current = peer;
       return peer;
     },
-    [emitCallEvent, ensureLocalStream, updateCurrentCall],
+    [emitCallEvent, ensureLocalStream, fetchIceServers, startHeartbeat, updateCurrentCall],
   );
 
   const createAndSendOffer = useCallback(
@@ -244,7 +341,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
   }, [shouldPlayIncomingRingtone]);
 
   const startPortariaCall = useCallback(
-    async (conversationUuid: string) => {
+    async (conversationUuid: string, withVideo = false) => {
       const normalizedConversationUuid = conversationUuid.trim();
       if (!normalizedConversationUuid) {
         toast.error("Abra uma conversa com a Portaria antes de ligar.");
@@ -319,7 +416,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     [emitCallEvent, resetCall],
   );
 
-  const acceptCurrentCall = useCallback(async () => {
+  const acceptCurrentCall = useCallback(async (withVideo = false) => {
     const active = currentCallRef.current;
     const callUuid = getCallUuid(active);
     if (!active || !callUuid) return;
@@ -328,7 +425,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     updateCurrentCall({ ...active, phase: "accepting", lastRequestId: requestId });
 
     try {
-      await ensurePeer(callUuid);
+      await ensurePeer(callUuid, withVideo);
       emitCallEvent("chat:call:accept", {
         call_uuid: callUuid,
         requestId,
@@ -346,6 +443,25 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       resetCall();
     }
   }, [emitCallEvent, ensurePeer, resetCall, updateCurrentCall]);
+
+  const toggleVideo = useCallback(async () => {
+    const stream = localStreamRef.current;
+    if (!stream) return;
+
+    if (videoEnabled) {
+      stream.getVideoTracks().forEach((t) => {
+        t.stop();
+        stream.removeTrack(t);
+        peerRef.current?.getSenders()
+          .filter((s) => s.track === t)
+          .forEach((s) => peerRef.current?.removeTrack(s));
+      });
+      if (localVideoRef.current) localVideoRef.current.srcObject = null;
+      setVideoEnabled(false);
+    } else {
+      await ensureLocalStream(true);
+    }
+  }, [ensureLocalStream, videoEnabled]);
 
   const handleOffer = useCallback(
     async (payload: ChatCallSdpPayload) => {
@@ -397,6 +513,38 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Pre-fetch ICE servers when user is authenticated
+  useEffect(() => {
+    if (canUseCalls) void fetchIceServers();
+  }, [canUseCalls, fetchIceServers]);
+
+  // Handle incoming call actions from push notification service worker
+  useEffect(() => {
+    if (!canUseCalls || !("serviceWorker" in navigator)) return undefined;
+
+    const handleSwMessage = (event: MessageEvent) => {
+      const msg = event.data as { type?: string; call_uuid?: string; conversation_uuid?: string };
+      if (!msg?.type) return;
+
+      if (msg.type === "CALL_PUSH_ACCEPT") {
+        const active = currentCallRef.current;
+        if (active && getCallUuid(active) === msg.call_uuid) {
+          void acceptCurrentCall(false);
+        }
+      } else if (msg.type === "CALL_PUSH_REJECT") {
+        const active = currentCallRef.current;
+        if (active && getCallUuid(active) === msg.call_uuid) {
+          rejectCurrentCall();
+        }
+      }
+    };
+
+    navigator.serviceWorker.addEventListener("message", handleSwMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", handleSwMessage);
+    };
+  }, [acceptCurrentCall, canUseCalls, rejectCurrentCall]);
+
   useEffect(() => {
     if (!canUseCalls) {
       setSocketStatus("idle");
@@ -430,6 +578,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       setReadyPayload(payload);
       setSocketStatus("ready");
       setSocketError("");
+      void fetchIceServers();
     };
 
     const handleConnectError = (error: Error) => {
@@ -564,6 +713,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     createAndSendOffer,
     emitRinging,
     endCurrentCall,
+    fetchIceServers,
     handleAnswer,
     handleIceCandidate,
     handleOffer,
@@ -580,10 +730,14 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       readyPayload,
       currentCall,
       canUseCalls,
+      videoEnabled,
+      localVideoRef,
+      remoteVideoRef,
       startPortariaCall,
       acceptCurrentCall,
       rejectCurrentCall,
       endCurrentCall,
+      toggleVideo,
     }),
     [
       acceptCurrentCall,
@@ -595,6 +749,8 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
       socketError,
       socketStatus,
       startPortariaCall,
+      toggleVideo,
+      videoEnabled,
     ],
   );
 
@@ -609,12 +765,29 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
         loop
         playsInline
       />
+      {/* Vídeo local (preview) — oculto quando não há vídeo */}
+      <video
+        ref={localVideoRef}
+        autoPlay
+        playsInline
+        muted
+        className={videoEnabled ? "fixed bottom-24 right-4 z-[81] h-32 w-24 rounded-xl object-cover shadow-lg" : "hidden"}
+      />
+      {/* Vídeo remoto */}
+      <video
+        ref={remoteVideoRef}
+        autoPlay
+        playsInline
+        className="hidden"
+      />
       <ChatCallOverlay
         socketStatus={socketStatus}
         currentCall={currentCall}
+        videoEnabled={videoEnabled}
         acceptCurrentCall={acceptCurrentCall}
         rejectCurrentCall={rejectCurrentCall}
         endCurrentCall={endCurrentCall}
+        toggleVideo={() => void toggleVideo()}
       />
     </ChatCallsContext.Provider>
   );
@@ -623,15 +796,19 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
 function ChatCallOverlay({
   socketStatus,
   currentCall,
+  videoEnabled,
   acceptCurrentCall,
   rejectCurrentCall,
   endCurrentCall,
+  toggleVideo,
 }: {
   socketStatus: ChatCallsContextValue["socketStatus"];
   currentCall: ActiveChatCall | null;
-  acceptCurrentCall: () => Promise<void>;
+  videoEnabled: boolean;
+  acceptCurrentCall: (withVideo?: boolean) => Promise<void>;
   rejectCurrentCall: () => void;
   endCurrentCall: () => void;
+  toggleVideo: () => void;
 }) {
   if (!currentCall) return null;
 
@@ -694,25 +871,47 @@ function ChatCallOverlay({
               </Button>
               <Button
                 type="button"
+                variant="outline"
+                className="rounded-2xl px-3"
+                onClick={() => void acceptCurrentCall(true)}
+                title="Atender com vídeo"
+              >
+                <Video className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
                 variant="success"
                 className="flex-1 rounded-2xl"
-                onClick={() => void acceptCurrentCall()}
+                onClick={() => void acceptCurrentCall(false)}
               >
                 <Phone className="h-4 w-4" />
                 Atender
               </Button>
             </>
           ) : (
-            <Button
-              type="button"
-              variant="destructive"
-              className="w-full rounded-2xl"
-              onClick={() => endCurrentCall()}
-              disabled={currentCall.phase === "ending"}
-            >
-              <PhoneOff className="h-4 w-4" />
-              Encerrar
-            </Button>
+            <>
+              {isActive && (
+                <Button
+                  type="button"
+                  variant={videoEnabled ? "secondary" : "outline"}
+                  className="rounded-2xl px-3"
+                  onClick={toggleVideo}
+                  title={videoEnabled ? "Desligar câmera" : "Ligar câmera"}
+                >
+                  {videoEnabled ? <VideoOff className="h-4 w-4" /> : <Video className="h-4 w-4" />}
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="destructive"
+                className="flex-1 rounded-2xl"
+                onClick={() => endCurrentCall()}
+                disabled={currentCall.phase === "ending"}
+              >
+                <PhoneOff className="h-4 w-4" />
+                Encerrar
+              </Button>
+            </>
           )}
         </div>
       </div>

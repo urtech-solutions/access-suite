@@ -20,11 +20,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSession } from "@/features/session/SessionProvider";
-import { requestAccessOsRegisterCode } from "@/services/mobile-app.service";
+import {
+  requestAccessOsForgotPassword,
+  requestAccessOsRegisterCode,
+  resetAccessOsPassword,
+  validateAccessOsResetCode,
+} from "@/services/mobile-app.service";
 
-type Mode = "login" | "register";
+type Mode = "login" | "register" | "forgot";
 type RegisterStep = "profile" | "email";
+type ForgotStep = "email" | "code" | "password";
 type RegisterVerificationState = "idle" | "checking" | "success" | "error";
+type VerificationOverlayContext = "register" | "password-reset";
 const REGISTER_RESEND_SECONDS = 60;
 const REGISTER_CHECKING_MIN_MS = 1_200;
 const REGISTER_SUCCESS_MIN_MS = 3_000;
@@ -73,6 +80,7 @@ const AuthPage = () => {
   const {
     connectBackend,
     registerAccessOs,
+    activateBackendSession,
     isConnecting,
   } = useSession();
 
@@ -101,6 +109,17 @@ const AuthPage = () => {
   const [verificationOverlayMessage, setVerificationOverlayMessage] = useState("");
   const [registerVerificationState, setRegisterVerificationState] =
     useState<RegisterVerificationState>("idle");
+  const [verificationOverlayContext, setVerificationOverlayContext] =
+    useState<VerificationOverlayContext>("register");
+  const [forgotCode, setForgotCode] = useState("");
+  const [forgotNewPassword, setForgotNewPassword] = useState("");
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState("");
+  const [forgotStep, setForgotStep] = useState<ForgotStep>("email");
+  const [forgotCodeExpiresInMinutes, setForgotCodeExpiresInMinutes] = useState<number | null>(null);
+  const [isRequestingForgotCode, setIsRequestingForgotCode] = useState(false);
+  const [isValidatingForgotCode, setIsValidatingForgotCode] = useState(false);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [forgotResendAvailableAt, setForgotResendAvailableAt] = useState(0);
 
   useEffect(() => {
     document.documentElement.classList.add("auth-scroll-page");
@@ -113,13 +132,16 @@ const AuthPage = () => {
   }, []);
 
   useEffect(() => {
-    if (!codeRequested || Date.now() >= resendAvailableAt) {
+    if (
+      (!codeRequested || Date.now() >= resendAvailableAt) &&
+      (forgotStep === "email" || Date.now() >= forgotResendAvailableAt)
+    ) {
       return undefined;
     }
 
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [codeRequested, resendAvailableAt]);
+  }, [codeRequested, forgotResendAvailableAt, forgotStep, resendAvailableAt]);
 
   function resetRegisterCodeState() {
     setVerificationCode("");
@@ -133,10 +155,29 @@ const AuthPage = () => {
     resetRegisterCodeState();
   }
 
+  function resetForgotPasswordFlow() {
+    setForgotStep("email");
+    setForgotCode("");
+    setForgotNewPassword("");
+    setForgotConfirmPassword("");
+    setForgotCodeExpiresInMinutes(null);
+    setForgotResendAvailableAt(0);
+    setIsPasswordVisible(false);
+    setIsConfirmPasswordVisible(false);
+  }
+
   function updateEmail(value: string) {
     setEmail(value);
     if (mode === "register" && codeRequested) {
       resetRegisterCodeState();
+    }
+    if (mode === "forgot" && forgotStep !== "email") {
+      setForgotStep("email");
+      setForgotCode("");
+      setForgotNewPassword("");
+      setForgotConfirmPassword("");
+      setForgotCodeExpiresInMinutes(null);
+      setForgotResendAvailableAt(0);
     }
   }
 
@@ -167,6 +208,75 @@ const AuthPage = () => {
     }
   }
 
+  async function sendForgotPasswordCode() {
+    if (!isValidEmail(email)) {
+      setMessage("Informe um e-mail valido para recuperar sua senha.");
+      return;
+    }
+
+    setMessage("");
+    setIsRequestingForgotCode(true);
+    try {
+      const response = await requestAccessOsForgotPassword(email.trim());
+      setForgotStep("code");
+      setForgotCodeExpiresInMinutes(15);
+      setForgotResendAvailableAt(Date.now() + REGISTER_RESEND_SECONDS * 1000);
+      setNow(Date.now());
+      setMessage(response.message);
+    } catch (error) {
+      setMessage(
+        resolveErrorMessage(
+          error,
+          "Nao foi possivel processar a recuperacao de senha.",
+        ),
+      );
+    } finally {
+      setIsRequestingForgotCode(false);
+    }
+  }
+
+  async function validateForgotPasswordCode() {
+    if (!isValidEmail(email)) {
+      setMessage("Informe um e-mail valido para recuperar sua senha.");
+      return;
+    }
+
+    if (!/^\d{6}$/.test(forgotCode.trim())) {
+      setMessage("Informe o codigo de 6 digitos recebido por e-mail.");
+      return;
+    }
+
+    setMessage("");
+    setIsValidatingForgotCode(true);
+    setVerificationOverlayContext("password-reset");
+    setRegisterVerificationState("checking");
+    const minimumCheckingDelay = wait(REGISTER_CHECKING_MIN_MS);
+    try {
+      const response = await validateAccessOsResetCode({
+        code: forgotCode.trim(),
+        email: email.trim(),
+      });
+      await minimumCheckingDelay;
+      setRegisterVerificationState("success");
+      await wait(REGISTER_SUCCESS_MIN_MS);
+      setForgotStep("password");
+      setMessage(response.message);
+    } catch (error) {
+      await minimumCheckingDelay;
+      const errorMessage = resolveErrorMessage(
+        error,
+        "Nao foi possivel validar o codigo de recuperacao.",
+      );
+      setVerificationOverlayMessage(errorMessage);
+      setRegisterVerificationState("error");
+      await wait(REGISTER_ERROR_MIN_MS);
+      setMessage(errorMessage);
+    } finally {
+      setIsValidatingForgotCode(false);
+      setRegisterVerificationState("idle");
+    }
+  }
+
   async function submit() {
     setMessage("");
 
@@ -188,16 +298,22 @@ const AuthPage = () => {
           return;
         }
 
+        setVerificationOverlayContext("register");
         setRegisterVerificationState("checking");
         const minimumCheckingDelay = wait(REGISTER_CHECKING_MIN_MS);
+        let registeredSession = null;
         try {
-          await registerAccessOs({
-            email: email.trim(),
-            email_verification_code: normalizedVerificationCode,
-            name,
-            password,
-            phone_number: formatPhoneNumber(phoneNumber),
-          });
+          registeredSession = await registerAccessOs(
+            {
+              cpf: cpfDigits,
+              email: email.trim(),
+              email_verification_code: normalizedVerificationCode,
+              name,
+              password,
+              phone_number: formatPhoneNumber(phoneNumber),
+            },
+            { activate: false },
+          );
           await minimumCheckingDelay;
         } catch (error) {
           await minimumCheckingDelay;
@@ -205,6 +321,34 @@ const AuthPage = () => {
         }
         setRegisterVerificationState("success");
         await wait(REGISTER_SUCCESS_MIN_MS);
+        await activateBackendSession(registeredSession);
+      } else if (mode === "forgot") {
+        if (forgotStep === "email") {
+          await sendForgotPasswordCode();
+          return;
+        }
+
+        if (forgotStep === "code") {
+          await validateForgotPasswordCode();
+          return;
+        }
+
+        setIsResettingPassword(true);
+        try {
+          const response = await resetAccessOsPassword({
+            code: forgotCode.trim(),
+            confirm_password: forgotConfirmPassword,
+            email: email.trim(),
+            new_password: forgotNewPassword,
+          });
+          resetForgotPasswordFlow();
+          setMode("login");
+          setPassword("");
+          setMessage(response.message);
+          return;
+        } finally {
+          setIsResettingPassword(false);
+        }
       } else {
         await connectBackend({
           context_key: "",
@@ -220,6 +364,8 @@ const AuthPage = () => {
         error,
         mode === "register"
           ? "Nao foi possivel criar sua conta AccessOS."
+          : mode === "forgot"
+            ? "Nao foi possivel redefinir sua senha."
           : "Nao foi possivel entrar no AccessOS.",
       );
       if (mode === "register") {
@@ -236,6 +382,13 @@ const AuthPage = () => {
   const canSubmit =
     mode === "login"
       ? isValidEmail(email) && password.trim().length >= 6
+      : mode === "forgot"
+        ? forgotStep === "email"
+          ? isValidEmail(email)
+          : forgotStep === "code"
+            ? isValidEmail(email) && /^\d{6}$/.test(forgotCode.trim())
+            : forgotNewPassword.trim().length >= 6 &&
+              forgotConfirmPassword === forgotNewPassword
       : registerStep === "profile"
         ? name.trim().length >= 2 &&
           cpfDigits.length === 11 &&
@@ -245,13 +398,20 @@ const AuthPage = () => {
         : isValidEmail(email) &&
           (!codeRequested || /^\d{6}$/.test(verificationCode.trim()));
   const passwordsDoNotMatch =
-    mode === "register" &&
+    (mode === "register" &&
     registerStep === "profile" &&
     confirmPassword.length > 0 &&
-    confirmPassword !== password;
+    confirmPassword !== password) ||
+    (mode === "forgot" &&
+      forgotConfirmPassword.length > 0 &&
+      forgotConfirmPassword !== forgotNewPassword);
   const resendRemainingSeconds = Math.max(
     0,
     Math.ceil((resendAvailableAt - now) / 1000),
+  );
+  const forgotResendRemainingSeconds = Math.max(
+    0,
+    Math.ceil((forgotResendAvailableAt - now) / 1000),
   );
 
   return (
@@ -294,6 +454,7 @@ const AuthPage = () => {
                 setMode("login");
                 setMessage("");
                 resetRegisterFlow();
+                resetForgotPasswordFlow();
               }}
               className={`rounded-[14px] px-3 py-2.5 text-sm font-semibold transition ${
                 mode === "login" ? "bg-amber-400 text-slate-950" : "text-white/50"
@@ -307,6 +468,7 @@ const AuthPage = () => {
                 setMode("register");
                 setMessage("");
                 resetRegisterFlow();
+                resetForgotPasswordFlow();
               }}
               className={`rounded-[14px] px-3 py-2.5 text-sm font-semibold transition ${
                 mode === "register" ? "bg-amber-400 text-slate-950" : "text-white/50"
@@ -321,6 +483,21 @@ const AuthPage = () => {
               <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.18em] text-white/35">
                 <span>{registerStep === "profile" ? "Dados pessoais" : "Verificacao"}</span>
                 <span>{registerStep === "profile" ? "Etapa 1 de 2" : "Etapa 2 de 2"}</span>
+              </div>
+            ) : null}
+
+            {mode === "forgot" ? (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/35">
+                  Recuperar senha
+                </p>
+                <p className="text-sm leading-relaxed text-white/55">
+                  {forgotStep === "email"
+                    ? "Informe seu e-mail para receber um codigo de recuperacao."
+                    : forgotStep === "code"
+                      ? "Digite o codigo enviado para o seu e-mail."
+                      : "Defina sua nova senha para concluir o acesso."}
+                </p>
               </div>
             ) : null}
 
@@ -359,7 +536,9 @@ const AuthPage = () => {
               </div>
             ) : null}
 
-            {(mode === "login" || registerStep === "email") ? (
+            {(mode === "login" ||
+              (mode === "forgot" && forgotStep !== "password") ||
+              registerStep === "email") ? (
               <div className="space-y-1">
               <Label className="text-xs text-white/50">E-mail</Label>
               <div className="relative">
@@ -439,7 +618,8 @@ const AuthPage = () => {
               </div>
             ) : null}
 
-            {(mode === "login" || registerStep === "profile") ? (
+            {(mode === "login" ||
+              (mode === "register" && registerStep === "profile")) ? (
               <div className="space-y-1">
               <Label className="text-xs text-white/50">Senha</Label>
               <div className="relative">
@@ -466,6 +646,121 @@ const AuthPage = () => {
                 </button>
               </div>
             </div>
+            ) : null}
+
+            {mode === "login" ? (
+              <button
+                type="button"
+                className="-mt-1 self-start text-xs font-semibold text-amber-300 transition hover:text-amber-200"
+                onClick={() => {
+                  setMode("forgot");
+                  setMessage("");
+                  resetForgotPasswordFlow();
+                }}
+              >
+                Esqueci minha senha
+              </button>
+            ) : null}
+
+            {mode === "forgot" && forgotStep === "code" ? (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-xs text-white/50">Codigo recebido por e-mail</Label>
+                  <Input
+                    value={forgotCode}
+                    onChange={(event) =>
+                      setForgotCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+                    }
+                    autoComplete="one-time-code"
+                    inputMode="numeric"
+                    maxLength={6}
+                    className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] text-center text-lg tracking-[0.35em] text-white placeholder:text-white/25"
+                    placeholder="000000"
+                  />
+                  <div className="flex items-center justify-between gap-3 text-xs text-white/40">
+                    <span>
+                      {forgotCodeExpiresInMinutes
+                        ? `Valido por ${forgotCodeExpiresInMinutes} minutos.`
+                        : "Codigo enviado."}
+                    </span>
+                    <button
+                      type="button"
+                      className="font-semibold text-amber-300 disabled:text-white/25"
+                      disabled={
+                        !isValidEmail(email) ||
+                        isRequestingForgotCode ||
+                        isValidatingForgotCode ||
+                        forgotResendRemainingSeconds > 0
+                      }
+                      onClick={() => void sendForgotPasswordCode()}
+                    >
+                      {forgotResendRemainingSeconds > 0
+                        ? `Reenviar em ${forgotResendRemainingSeconds}s`
+                        : "Reenviar codigo"}
+                    </button>
+                  </div>
+                </div>
+
+              </>
+            ) : null}
+
+            {mode === "forgot" && forgotStep === "password" ? (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-xs text-white/50">Nova senha</Label>
+                  <div className="relative">
+                    <LockKeyhole className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+                    <Input
+                      value={forgotNewPassword}
+                      onChange={(event) => setForgotNewPassword(event.target.value)}
+                      autoComplete="new-password"
+                      type={isPasswordVisible ? "text" : "password"}
+                      className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] pl-11 pr-11 text-white placeholder:text-white/25"
+                      placeholder="Nova senha"
+                    />
+                    <button
+                      type="button"
+                      aria-label={isPasswordVisible ? "Ocultar senha" : "Mostrar senha"}
+                      className="absolute right-4 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center text-white/35 transition hover:text-white/70"
+                      onClick={() => setIsPasswordVisible((value) => !value)}
+                    >
+                      {isPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs text-white/50">Confirmar nova senha</Label>
+                  <div className="relative">
+                    <LockKeyhole className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+                    <Input
+                      value={forgotConfirmPassword}
+                      onChange={(event) => setForgotConfirmPassword(event.target.value)}
+                      autoComplete="new-password"
+                      type={isConfirmPasswordVisible ? "text" : "password"}
+                      className="h-12 rounded-[16px] border-white/[0.12] bg-white/[0.07] pl-11 pr-11 text-white placeholder:text-white/25"
+                      placeholder="Repita a nova senha"
+                    />
+                    <button
+                      type="button"
+                      aria-label={
+                        isConfirmPasswordVisible
+                          ? "Ocultar confirmacao de senha"
+                          : "Mostrar confirmacao de senha"
+                      }
+                      className="absolute right-4 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center text-white/35 transition hover:text-white/70"
+                      onClick={() => setIsConfirmPasswordVisible((value) => !value)}
+                    >
+                      {isConfirmPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {passwordsDoNotMatch ? (
+                    <p className="text-xs font-medium text-red-200/65">
+                      As senhas precisam ser iguais.
+                    </p>
+                  ) : null}
+                </div>
+              </>
             ) : null}
 
             {mode === "register" && registerStep === "profile" ? (
@@ -520,14 +815,27 @@ const AuthPage = () => {
                   !canSubmit ||
                   isConnecting ||
                   isRequestingCode ||
+                  isRequestingForgotCode ||
+                  isValidatingForgotCode ||
+                  isResettingPassword ||
                   registerVerificationState !== "idle"
                 }
               >
-                {isConnecting || isRequestingCode
+                {isConnecting ||
+                isRequestingCode ||
+                isRequestingForgotCode ||
+                isValidatingForgotCode ||
+                isResettingPassword
                   ? mode === "register"
                     ? codeRequested
                       ? "Criando conta..."
                       : "Enviando codigo..."
+                    : mode === "forgot"
+                      ? forgotStep === "password"
+                        ? "Redefinindo senha..."
+                        : forgotStep === "code"
+                          ? "Validando codigo..."
+                          : "Enviando codigo..."
                     : "Entrando..."
                   : mode === "register"
                     ? registerStep === "profile"
@@ -535,6 +843,12 @@ const AuthPage = () => {
                       : codeRequested
                         ? "Confirmar e criar conta"
                         : "Enviar codigo"
+                    : mode === "forgot"
+                      ? forgotStep === "password"
+                        ? "Redefinir senha"
+                        : forgotStep === "code"
+                          ? "Validar codigo"
+                          : "Enviar codigo"
                     : "Entrar no AccessOS"}
                 <ArrowRight className="h-4 w-4" />
               </Button>
@@ -550,6 +864,21 @@ const AuthPage = () => {
                 >
                   <ArrowLeft className="h-4 w-4" />
                   Voltar para dados pessoais
+                </button>
+              ) : null}
+
+              {mode === "forgot" ? (
+                <button
+                  type="button"
+                  className="flex h-10 w-full items-center justify-center gap-2 text-sm font-semibold text-white/45 transition hover:text-white/70"
+                  onClick={() => {
+                    setMode("login");
+                    setMessage("");
+                    resetForgotPasswordFlow();
+                  }}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Voltar ao login
                 </button>
               ) : null}
             </div>
@@ -601,10 +930,14 @@ const AuthPage = () => {
             </p>
             <p className="mt-2 text-sm leading-relaxed text-white/55">
               {registerVerificationState === "success"
-                ? "Conta criada com sucesso. Preparando seu acesso..."
+                ? verificationOverlayContext === "password-reset"
+                  ? "Codigo validado. Defina sua nova senha para concluir."
+                  : "Conta criada com sucesso. Preparando seu acesso..."
                 : registerVerificationState === "error"
                   ? verificationOverlayMessage || "O codigo informado esta invalido."
-                : "Estamos confirmando seu e-mail e criando sua conta AccessOS."}
+                : verificationOverlayContext === "password-reset"
+                  ? "Estamos validando o codigo de recuperacao."
+                  : "Estamos confirmando seu e-mail e criando sua conta AccessOS."}
             </p>
           </div>
         </div>

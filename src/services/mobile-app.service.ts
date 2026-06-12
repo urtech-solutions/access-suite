@@ -2,6 +2,7 @@ import { DEFAULT_API_BASE_URL } from "@/config/env";
 import { getResidentDeviceInfo } from "@/services/device-info";
 import { readStorage, removeStorage, writeStorage } from "@/services/storage";
 import type {
+  AccessOsInvite,
   BulletinPost,
   BulletinModuleStatus,
   BulletinTag,
@@ -12,6 +13,11 @@ import type {
   CommonArea,
   ConnectionState,
   AccessOsRegisterInput,
+  AccessOsForgotPasswordResponse,
+  AccessOsResetPasswordInput,
+  AccessOsResetPasswordResponse,
+  AccessOsValidateResetCodeInput,
+  AccessOsValidateResetCodeResponse,
   CreateBulletinInput,
   CreateIncidentInput,
   CreateReservationInput,
@@ -121,6 +127,43 @@ type SavePushSubscriptionInput = {
   auth: string;
   expiration_time?: number | null;
 };
+
+const demoAccessOsInvites: AccessOsInvite[] = [
+  {
+    id: "demo-site-alpha",
+    site_name: "Residencial Jardim Europa",
+    tenant_name: "Howbe Condomínios",
+    role_label: "Morador",
+    unit_label: "Bloco B · Apto 1204",
+    address: "Rua das Palmeiras, 410",
+    status: "ACCEPTED",
+    match_method: "EMAIL_CPF",
+    meta: "Acesso liberado por correspondência de e-mail + CPF",
+  },
+  {
+    id: "demo-site-beta",
+    site_name: "Edifício Villa Serena",
+    tenant_name: "AccessOS Demo",
+    role_label: "Síndico",
+    unit_label: "Painel do condomínio",
+    address: "Av. Central, 85",
+    status: "PENDING",
+    match_method: "EMAIL_CPF",
+    meta: "Encontrado por e-mail + CPF. Aguardando sua resposta.",
+  },
+  {
+    id: "demo-site-gamma",
+    site_name: "Condomínio Vista Norte",
+    tenant_name: "Grupo Operacional Norte",
+    role_label: "Morador",
+    unit_label: "Torre 1 · Apto 302",
+    address: "Rua Aurora, 920",
+    status: "REJECTED",
+    match_method: "EMAIL_CPF",
+    responded_at: "2026-06-10T10:00:00",
+    meta: "Convite recusado em 10/06",
+  },
+];
 
 export function normalizeApiBaseUrl(baseUrl?: string) {
   const fallback = String(DEFAULT_API_BASE_URL ?? "http://localhost:3000")
@@ -1024,6 +1067,48 @@ export async function requestAccessOsRegisterCode(
   );
 }
 
+export async function requestAccessOsForgotPassword(
+  email: string,
+  baseUrl?: string,
+) {
+  return requestJson<AccessOsForgotPasswordResponse>(
+    "/auth/access-os/forgot-password",
+    {
+      baseUrl,
+      method: "POST",
+      body: { email },
+    },
+  );
+}
+
+export async function validateAccessOsResetCode(
+  payload: AccessOsValidateResetCodeInput,
+  baseUrl?: string,
+) {
+  return requestJson<AccessOsValidateResetCodeResponse>(
+    "/auth/access-os/validate-reset-code",
+    {
+      baseUrl,
+      method: "POST",
+      body: payload,
+    },
+  );
+}
+
+export async function resetAccessOsPassword(
+  payload: AccessOsResetPasswordInput,
+  baseUrl?: string,
+) {
+  return requestJson<AccessOsResetPasswordResponse>(
+    "/auth/access-os/reset-password",
+    {
+      baseUrl,
+      method: "POST",
+      body: payload,
+    },
+  );
+}
+
 export async function acceptAccessOsInvite(
   snapshot: SessionSnapshot,
   token: string,
@@ -1043,6 +1128,69 @@ export async function acceptAccessOsInvite(
   );
 
   return createBackendSnapshot(response, snapshot.apiBaseUrl);
+}
+
+export async function listAccessOsInvites(snapshot: SessionSnapshot) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão AccessOS não autenticada.");
+  }
+
+  try {
+    return await requestJson<AccessOsInvite[]>("/access-os/invites", {
+      baseUrl: snapshot.apiBaseUrl,
+      token: snapshot.token,
+    });
+  } catch (error) {
+    if (isApiStatusError(error, 404)) {
+      return demoAccessOsInvites;
+    }
+
+    throw error;
+  }
+}
+
+export async function acceptAccessOsMatchedInvite(
+  snapshot: SessionSnapshot,
+  inviteId: AccessOsInvite["id"],
+) {
+  if (String(inviteId).startsWith("demo-")) {
+    return { success: true };
+  }
+
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão AccessOS não autenticada.");
+  }
+
+  return requestJson<{ success: boolean }>(
+    `/access-os/invites/${encodeURIComponent(String(inviteId))}/accept`,
+    {
+      baseUrl: snapshot.apiBaseUrl,
+      method: "POST",
+      token: snapshot.token,
+    },
+  );
+}
+
+export async function rejectAccessOsMatchedInvite(
+  snapshot: SessionSnapshot,
+  inviteId: AccessOsInvite["id"],
+) {
+  if (String(inviteId).startsWith("demo-")) {
+    return { success: true };
+  }
+
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão AccessOS não autenticada.");
+  }
+
+  return requestJson<{ success: boolean }>(
+    `/access-os/invites/${encodeURIComponent(String(inviteId))}/reject`,
+    {
+      baseUrl: snapshot.apiBaseUrl,
+      method: "POST",
+      token: snapshot.token,
+    },
+  );
 }
 
 export async function hydrateBackendSession(snapshot: SessionSnapshot) {

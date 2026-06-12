@@ -42,9 +42,34 @@ export interface ResidentAppCredentials {
 export interface AccessOsRegisterInput {
   name: string;
   email: string;
+  cpf: string;
   email_verification_code: string;
   phone_number: string;
   password: string;
+}
+
+export interface AccessOsForgotPasswordResponse {
+  message: string;
+}
+
+export interface AccessOsValidateResetCodeInput {
+  code: string;
+  email: string;
+}
+
+export interface AccessOsValidateResetCodeResponse {
+  message: string;
+}
+
+export interface AccessOsResetPasswordInput {
+  code: string;
+  confirm_password: string;
+  email: string;
+  new_password: string;
+}
+
+export interface AccessOsResetPasswordResponse {
+  message: string;
 }
 
 export interface ResidentAppLookupProfile {
@@ -133,6 +158,30 @@ export interface ResidentProfile {
   context_label?: string | null;
   avatar: string;
   tag: string;
+}
+
+export type AccessOsInviteStatus = "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED";
+
+export type AccessOsInviteMatchMethod = "EMAIL_CPF" | "TOKEN";
+
+export interface AccessOsInvite {
+  id: number | string;
+  site_id?: number | null;
+  site_name: string;
+  tenant_uuid?: string | null;
+  tenant_name: string;
+  role_label: string;
+  unit_label?: string | null;
+  address?: string | null;
+  status: AccessOsInviteStatus;
+  match_method: AccessOsInviteMatchMethod;
+  matched_email?: string | null;
+  matched_cpf_digits?: string | null;
+  invited_person_name?: string | null;
+  invited_at?: string | null;
+  responded_at?: string | null;
+  expires_at?: string | null;
+  meta?: string | null;
 }
 
 export interface VisitorAccessEvent {

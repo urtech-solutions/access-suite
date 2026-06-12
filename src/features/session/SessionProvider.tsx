@@ -42,7 +42,11 @@ type SessionContextValue = {
   isAuthenticated: boolean;
   switchResident: (residentId: number) => Promise<void>;
   connectBackend: (credentials: ResidentAppCredentials) => Promise<SessionSnapshot>;
-  registerAccessOs: (payload: AccessOsRegisterInput) => Promise<SessionSnapshot>;
+  registerAccessOs: (
+    payload: AccessOsRegisterInput,
+    options?: { activate?: boolean },
+  ) => Promise<SessionSnapshot>;
+  activateBackendSession: (next: SessionSnapshot) => Promise<void>;
   acceptAccessOsInvite: (token: string) => Promise<SessionSnapshot>;
   disconnectBackend: () => void;
   refreshResidents: () => Promise<void>;
@@ -198,13 +202,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function registerAccessOs(payload: AccessOsRegisterInput) {
+  async function activateBackendSession(next: SessionSnapshot) {
+    setSnapshot(next);
+    setResidents(await loadBackendResidents(next));
+  }
+
+  async function registerAccessOs(
+    payload: AccessOsRegisterInput,
+    options?: { activate?: boolean },
+  ) {
     setIsConnecting(true);
     try {
       const next = await registerAccessOsAccount(payload);
-      setSnapshot(next);
-      setResidents(await loadBackendResidents(next));
-      toast.success("Conta AccessOS criada.");
+      if (options?.activate !== false) {
+        await activateBackendSession(next);
+      }
       return next;
     } catch (error) {
       throw error;
@@ -282,6 +294,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         switchResident,
         connectBackend,
         registerAccessOs,
+        activateBackendSession,
         acceptAccessOsInvite: acceptInvite,
         disconnectBackend,
         refreshResidents,

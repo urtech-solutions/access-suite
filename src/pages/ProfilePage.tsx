@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  KeyRound,
   LogOut,
   RefreshCw,
   ShieldCheck,
@@ -71,7 +72,147 @@ function resizeImageToDataUrl(
   });
 }
 
-const ProfilePage = () => {
+const LimitedProfilePage = () => {
+  const navigate = useNavigate();
+  const {
+    snapshot,
+    isAuthenticated,
+    disconnectBackend,
+  } = useSession();
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  async function handleChangePassword() {
+    if (newPassword.length < 4) {
+      toast.error("A nova senha deve ter ao menos 4 caracteres.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error("A confirmação não corresponde à nova senha.");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await changeResidentPassword(newPassword, snapshot);
+      toast.success("Senha alterada com sucesso.");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch {
+      toast.error("Não foi possível alterar a senha.");
+    } finally {
+      setChangingPassword(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col bg-background">
+      <div className="px-4 pt-5">
+        <div className="relative overflow-hidden rounded-3xl border border-primary/10 bg-primary pb-8 pt-4 text-primary-foreground shadow-xl shadow-primary/15">
+        <div className="absolute inset-x-0 top-0 h-32 bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.25),transparent_55%)]" />
+
+        <div className="relative z-10 flex items-center gap-3 px-4">
+          <button
+            onClick={() => navigate("/")}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/20"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <h1 className="text-base font-semibold">Conta</h1>
+        </div>
+
+        <div className="relative z-10 flex items-center gap-3 px-4 pt-6">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-primary-foreground/15 text-lg font-bold text-primary-foreground shadow-lg shadow-black/20 ring-4 ring-primary-foreground/10">
+            {(snapshot.user?.name?.trim() || "U").slice(0, 1).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <h2 className="truncate text-xl font-bold">
+              {snapshot.user?.name?.trim() || "Usuário AccessOS"}
+            </h2>
+            <p className="mt-0.5 truncate text-sm text-primary-foreground/65">
+              {snapshot.user?.email ?? "E-mail não informado"}
+            </p>
+          </div>
+        </div>
+        <div className="relative z-10 px-4">
+          <div className="mt-3">
+            <ConnectivityPill />
+          </div>
+        </div>
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col gap-4 px-4 py-5">
+        <button
+          type="button"
+          onClick={() => navigate("/access-invites")}
+          className="flex w-full items-center gap-3 rounded-[24px] border border-border bg-card p-4 text-left shadow-sm transition-colors active:scale-[0.98] hover:bg-muted/30"
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <Building2 className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-foreground">Meus sites</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Acompanhe acessos aceitos e convites.
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </button>
+
+        <div className="overflow-hidden rounded-[24px] border border-border bg-card shadow-sm">
+          <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-muted text-muted-foreground">
+              <KeyRound className="h-4 w-4" />
+            </div>
+            <p className="text-sm font-semibold text-foreground">
+              Senha da conta
+            </p>
+          </div>
+          <div className="space-y-2 p-4">
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Nova senha"
+              className="h-12 rounded-[16px]"
+            />
+            <Input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Confirmar nova senha"
+              className="h-12 rounded-[16px]"
+            />
+            <Button
+              variant="secondary"
+              className="w-full rounded-[16px]"
+              onClick={handleChangePassword}
+              disabled={changingPassword || !snapshot.token}
+            >
+              {changingPassword ? "Salvando..." : "Salvar nova senha"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-2.5">
+          {isAuthenticated && (
+            <Button
+              variant="destructive"
+              className="w-full rounded-[18px]"
+              onClick={disconnectBackend}
+            >
+              <LogOut className="h-4 w-4" />
+              Sair da conta
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ResidentProfilePage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const {
@@ -388,6 +529,16 @@ const ProfilePage = () => {
       </Sheet>
     </div>
   );
+};
+
+const ProfilePage = () => {
+  const { resident } = useSession();
+
+  if (!resident) {
+    return <LimitedProfilePage />;
+  }
+
+  return <ResidentProfilePage />;
 };
 
 export default ProfilePage;

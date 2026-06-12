@@ -7,11 +7,13 @@ import {
   ChevronsUpDown,
   Check,
   Loader2,
+  Mail,
   Megaphone,
   MessageCircle,
   Package,
   Shield,
-  Users,
+  TicketCheck,
+  UserRound,
   Wallet,
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -22,6 +24,8 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Sheet,
   SheetContent,
@@ -70,7 +74,126 @@ function resolveGreeting() {
   return "Boa noite";
 }
 
-const HomePage = () => {
+function getInviteTokenFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("invite") ?? params.get("token") ?? "";
+}
+
+const LimitedHomePage = () => {
+  const navigate = useNavigate();
+  const {
+    snapshot,
+    acceptAccessOsInvite,
+    isConnecting,
+  } = useSession();
+  const [token, setToken] = useState(getInviteTokenFromUrl);
+  const [message, setMessage] = useState("");
+
+  async function submitInvite() {
+    setMessage("");
+    try {
+      await acceptAccessOsInvite(token);
+      window.history.replaceState({}, "", window.location.pathname);
+    } catch (error) {
+      setMessage(
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : "Nao foi possivel aceitar o convite.",
+      );
+    }
+  }
+
+  return (
+    <div className="space-y-4 px-4 pb-6 pt-5">
+      <section className="relative overflow-hidden rounded-3xl border border-primary/10 bg-primary px-5 pb-5 pt-5 text-primary-foreground shadow-xl shadow-primary/15">
+        <div className="absolute inset-x-0 top-0 h-24 bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.25),transparent_50%)]" />
+        <div className="relative z-10">
+          <h1 className="text-2xl font-extrabold leading-tight tracking-tight">
+            Início
+          </h1>
+          <p className="mt-3 text-sm leading-relaxed text-primary-foreground/65">
+            Aceite um convite ou aguarde a liberação do acesso.
+          </p>
+
+          <div className="mt-4 rounded-2xl border border-primary-foreground/15 bg-primary-foreground/10 px-4 py-3">
+            <div className="flex items-center gap-2 text-sm text-primary-foreground/75">
+              <Mail className="h-4 w-4 text-primary-foreground/40" />
+              <span className="truncate">
+                {snapshot.user?.email ?? "Conta AccessOS"}
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <button
+          type="button"
+          onClick={() => navigate("/profile")}
+          className="w-full rounded-2xl border border-border bg-card p-4 text-left shadow-sm transition-colors active:scale-[0.98] hover:bg-muted/30"
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <UserRound className="h-5 w-5" />
+          </div>
+          <p className="mt-3 text-sm font-semibold text-foreground">
+            Minha conta
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Dados, senha e sessão.
+          </p>
+        </button>
+      </section>
+
+      <section className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-400/15 text-amber-600">
+            <Shield className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-sm font-bold text-foreground">
+              Nenhum vínculo ativo
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Por enquanto, esta conta ainda não possui site, unidade ou perfil
+              operacional associado.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              Token de convite
+            </Label>
+            <Input
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              className="h-12 rounded-2xl"
+              placeholder="Cole o token recebido"
+            />
+          </div>
+
+          {message ? (
+            <div className="rounded-2xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-700">
+              {message}
+            </div>
+          ) : null}
+
+          <Button
+            className="h-12 w-full rounded-2xl font-semibold"
+            disabled={!token.trim() || isConnecting}
+            onClick={() => void submitInvite()}
+          >
+            <TicketCheck className="h-4 w-4" />
+            {isConnecting ? "Validando convite..." : "Aceitar convite"}
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
+};
+
+const ResidentHomePage = () => {
   const navigate = useNavigate();
   const { resident, residents, snapshot, connectionState, switchResident } =
     useSession();
@@ -585,6 +708,16 @@ const HomePage = () => {
       </Sheet>
     </div>
   );
+};
+
+const HomePage = () => {
+  const { resident } = useSession();
+
+  if (!resident) {
+    return <LimitedHomePage />;
+  }
+
+  return <ResidentHomePage />;
 };
 
 export default HomePage;

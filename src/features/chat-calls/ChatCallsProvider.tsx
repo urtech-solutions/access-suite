@@ -24,6 +24,8 @@ import {
 import { useSession } from "@/features/session/SessionProvider";
 import {
   CHAT_MODULE_KEY,
+  canUseResidentAppBackend,
+  isSiteOwnerProfile,
   sessionHasModule,
 } from "@/services/mobile-app.service";
 
@@ -76,8 +78,14 @@ function getPeerConnectionConfig(iceServers?: IceServer[]): RTCConfiguration {
 }
 
 export function ChatCallsProvider({ children }: { children: ReactNode }) {
-  const { snapshot, isAuthenticated } = useSession();
-  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
+  const { resident, snapshot, isAuthenticated } = useSession();
+  const isSiteOwner = isSiteOwnerProfile(resident);
+  const canUseResidentAppRequests = canUseResidentAppBackend(
+    snapshot,
+    resident,
+  );
+  const hasChatModule =
+    canUseResidentAppRequests && sessionHasModule(snapshot, CHAT_MODULE_KEY);
   const socketRef = useRef<Socket | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);

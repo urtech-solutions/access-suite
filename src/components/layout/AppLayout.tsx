@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import {
   CHAT_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
+  isSiteOwnerProfile,
   sessionHasModule,
 } from "@/services/mobile-app.service";
 
@@ -39,11 +40,13 @@ const tabs = [
 const AppLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { snapshot } = useSession();
+  const { resident, snapshot } = useSession();
   const { attentionCounts } = useResidentNotificationCenter();
   const isChatRoute = location.pathname.startsWith("/chat");
+  const isSiteOwner = isSiteOwnerProfile(resident);
   const visibleTabs = tabs.filter(
     (tab) =>
+      (!isSiteOwner || tab.path === "/" || tab.path === "/profile") &&
       (tab.path !== "/chat" || sessionHasModule(snapshot, CHAT_MODULE_KEY)) &&
       (tab.path !== "/porteiro/incidentes" ||
         sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)),
@@ -88,7 +91,11 @@ const AppLayout = () => {
             <div
               className={cn(
                 "grid rounded-[26px] border border-border/60 bg-card/95 px-1.5 py-1.5 shadow-2xl shadow-black/12 backdrop-blur-xl",
-                visibleTabs.length > 5 ? "grid-cols-6" : "grid-cols-5",
+                visibleTabs.length <= 2
+                  ? "grid-cols-2"
+                  : visibleTabs.length > 5
+                    ? "grid-cols-6"
+                    : "grid-cols-5",
               )}
             >
               {visibleTabs.map((tab) => {

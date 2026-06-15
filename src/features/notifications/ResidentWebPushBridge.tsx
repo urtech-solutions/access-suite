@@ -10,12 +10,19 @@ import {
   setWebPushRegistered,
 } from "@/lib/web-push";
 import {
+  canUseResidentAppBackend,
   getResidentWebPushConfig,
+  isSiteOwnerProfile,
   registerResidentPushSubscription,
 } from "@/services/mobile-app.service";
 
 export function ResidentWebPushBridge() {
-  const { snapshot, isAuthenticated } = useSession();
+  const { resident, snapshot, isAuthenticated } = useSession();
+  const isSiteOwner = isSiteOwnerProfile(resident);
+  const canUseResidentAppRequests = canUseResidentAppBackend(
+    snapshot,
+    resident,
+  );
   const [permission, setPermission] = useState(getWebPushPermission());
 
   useEffect(() => {
@@ -35,7 +42,13 @@ export function ResidentWebPushBridge() {
   }, []);
 
   useEffect(() => {
-    if (snapshot.mode !== "backend" || !isAuthenticated || !snapshot.token) {
+    if (
+      snapshot.mode !== "backend" ||
+      !isAuthenticated ||
+      !snapshot.token ||
+      isSiteOwner ||
+      !canUseResidentAppRequests
+    ) {
       setWebPushRegistered(false);
       return;
     }
@@ -76,6 +89,8 @@ export function ResidentWebPushBridge() {
     };
   }, [
     isAuthenticated,
+    isSiteOwner,
+    canUseResidentAppRequests,
     permission,
     snapshot,
     snapshot.apiBaseUrl,

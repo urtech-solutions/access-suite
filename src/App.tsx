@@ -17,6 +17,7 @@ import { ResidentWebPushBridge } from "@/features/notifications/ResidentWebPushB
 import { ResidentRealtimeBridge } from "@/features/realtime/ResidentRealtimeBridge";
 import { useSession } from "@/features/session/SessionProvider";
 import { AppProviders } from "@/providers/AppProviders";
+import { isSiteOwnerProfile } from "@/services/mobile-app.service";
 
 const AuthPage = lazy(() => import("@/pages/AuthPage"));
 const AccessInvitesPage = lazy(() => import("@/pages/AccessInvitesPage"));
@@ -132,6 +133,15 @@ const ProtectedShell = () => {
     }
 
     return <NoAccessPage />;
+  }
+
+  if (isSiteOwnerProfile(resident)) {
+    const isAllowedOwnerRoute =
+      location.pathname === "/" || location.pathname.startsWith("/profile");
+
+    if (!isAllowedOwnerRoute) {
+      return <Navigate to="/" replace />;
+    }
   }
 
   return (

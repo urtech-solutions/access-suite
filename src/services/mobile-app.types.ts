@@ -160,6 +160,40 @@ export interface ResidentProfile {
   tag: string;
 }
 
+export interface SiteOwnerMetricSummary {
+  total: number;
+  online: number;
+  offline: number;
+}
+
+export interface SiteOwnerOverview {
+  role: "OWNER";
+  site: {
+    city?: string | null;
+    id: number;
+    name: string;
+    physical_address?: string | null;
+    site_code?: string | null;
+    state?: string | null;
+    status?: string | null;
+    updated_at?: string | null;
+  };
+  tenant: {
+    name: string;
+    uuid: string;
+  };
+  metrics: {
+    cameras: SiteOwnerMetricSummary;
+    controllers: SiteOwnerMetricSummary & {
+      setup_pending: number;
+    };
+    devices: SiteOwnerMetricSummary;
+    locations: {
+      total: number;
+    };
+  };
+}
+
 export type AccessOsInviteStatus = "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED";
 
 export type AccessOsInviteMatchMethod = "EMAIL_CPF" | "TOKEN";

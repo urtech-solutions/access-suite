@@ -2,18 +2,25 @@ import { useState } from "react";
 import {
   AlertTriangle,
   Bell,
+  Building2,
   CalendarClock,
+  Camera,
   ChevronRight,
   ChevronsUpDown,
   Check,
+  Cpu,
   Loader2,
   Mail,
+  MapPin,
   Megaphone,
   MessageCircle,
   Package,
+  RefreshCw,
+  Server,
   Shield,
   TicketCheck,
   UserRound,
+  Users,
   Wallet,
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -48,6 +55,8 @@ import {
   BULLETIN_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
   getDeliverySettings,
+  getSiteOwnerOverview,
+  isSiteOwnerProfile,
   listBulletin,
   listCommonAreas,
   listDeliveries,
@@ -187,6 +196,208 @@ const LimitedHomePage = () => {
             <TicketCheck className="h-4 w-4" />
             {isConnecting ? "Validando convite..." : "Aceitar convite"}
           </Button>
+        </div>
+      </section>
+    </div>
+  );
+};
+
+const SiteOwnerHomePage = () => {
+  const { resident, snapshot } = useSession();
+  const overviewQuery = useQuery({
+    queryKey: [
+      "site-owner-overview",
+      resident?.site_id,
+      snapshot.residentAuth?.account_uuid,
+    ],
+    queryFn: () => getSiteOwnerOverview(snapshot),
+    enabled: Boolean(snapshot.token && resident?.site_id),
+    retry: 1,
+  });
+
+  const overview = overviewQuery.data;
+  const siteName = overview?.site.name ?? resident?.site_name ?? "Site";
+  const tenantName = overview?.tenant.name ?? resident?.tenant_name ?? "AccessOS";
+  const locationLabel = [
+    overview?.site.city,
+    overview?.site.state,
+  ].filter(Boolean).join(" - ");
+  const updatedAt = overview?.site.updated_at
+    ? new Date(overview.site.updated_at).toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  const metrics = [
+    {
+      icon: Server,
+      label: "Dispositivos",
+      value: overview?.metrics.devices.total ?? 0,
+      detail: `${overview?.metrics.devices.online ?? 0} online`,
+      tone: "bg-sky-500/10 text-sky-600",
+    },
+    {
+      icon: Camera,
+      label: "Cameras",
+      value: overview?.metrics.cameras.total ?? 0,
+      detail: `${overview?.metrics.cameras.online ?? 0} online`,
+      tone: "bg-emerald-500/10 text-emerald-600",
+    },
+    {
+      icon: Cpu,
+      label: "Controladores",
+      value: overview?.metrics.controllers.total ?? 0,
+      detail:
+        (overview?.metrics.controllers.setup_pending ?? 0) > 0
+          ? `${overview?.metrics.controllers.setup_pending ?? 0} em setup`
+          : `${overview?.metrics.controllers.online ?? 0} online`,
+      tone: "bg-amber-500/10 text-amber-600",
+    },
+    {
+      icon: MapPin,
+      label: "Locais",
+      value: overview?.metrics.locations.total ?? 0,
+      detail: "Mapeados no site",
+      tone: "bg-violet-500/10 text-violet-600",
+    },
+  ];
+
+  return (
+    <div className="space-y-4 px-4 pb-4 pt-5">
+      <motion.section
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative overflow-hidden rounded-3xl border border-primary/10 bg-primary px-5 pb-5 pt-5 text-primary-foreground shadow-xl shadow-primary/15"
+      >
+        <div className="absolute inset-x-0 top-0 h-24 bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.25),transparent_50%)]" />
+        <div className="relative z-10">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary-foreground/55">
+            Gerencia do site
+          </p>
+          <h1 className="mt-1 text-2xl font-extrabold leading-tight tracking-tight">
+            {siteName}
+          </h1>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-primary-foreground/70">
+            <span className="rounded-full bg-primary-foreground/12 px-2.5 py-1 font-semibold text-primary-foreground/80">
+              Dono do site
+            </span>
+            <span>{tenantName}</span>
+          </div>
+          {locationLabel ? (
+            <p className="mt-2 text-xs text-primary-foreground/55">
+              {locationLabel}
+            </p>
+          ) : null}
+          <ConnectivityPill className="mt-3" />
+        </div>
+      </motion.section>
+
+      {overviewQuery.isError ? (
+        <section className="rounded-2xl border border-amber-400/25 bg-amber-400/10 p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-400/20 text-amber-700">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-foreground">
+                Informacoes indisponiveis
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Nao foi possivel carregar o resumo operacional agora. Tente
+                novamente em instantes.
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="mt-3 rounded-full"
+                onClick={() => void overviewQuery.refetch()}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Atualizar
+              </Button>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      <motion.section
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.04 }}
+        className="grid grid-cols-2 gap-2.5"
+      >
+        {metrics.map((metric) => (
+          <div
+            key={metric.label}
+            className="rounded-2xl border border-border bg-card p-4 shadow-sm"
+          >
+            <div
+              className={`flex h-10 w-10 items-center justify-center rounded-xl ${metric.tone}`}
+            >
+              <metric.icon className="h-5 w-5" />
+            </div>
+            <p className="mt-3 text-2xl font-extrabold tracking-tight text-foreground">
+              {overviewQuery.isLoading ? "..." : metric.value}
+            </p>
+            <p className="text-sm font-semibold text-foreground">
+              {metric.label}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {overviewQuery.isLoading ? "Carregando" : metric.detail}
+            </p>
+          </div>
+        ))}
+      </motion.section>
+
+      <section className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <Building2 className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-foreground">
+              Informacoes do site
+            </p>
+            <div className="mt-3 space-y-2 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Status</span>
+                <span className="font-semibold text-foreground">
+                  {overview?.site.status ?? "Indisponivel"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Codigo</span>
+                <span className="font-semibold text-foreground">
+                  {overview?.site.site_code ?? "Nao informado"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Atualizado</span>
+                <span className="font-semibold text-foreground">
+                  {updatedAt ?? "Nao informado"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-dashed border-border bg-card/60 p-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+            <Shield className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">
+              Modo somente leitura
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Esta visao e exclusiva para acompanhamento gerencial do site.
+            </p>
+          </div>
         </div>
       </section>
     </div>
@@ -715,6 +926,10 @@ const HomePage = () => {
 
   if (!resident) {
     return <LimitedHomePage />;
+  }
+
+  if (isSiteOwnerProfile(resident)) {
+    return <SiteOwnerHomePage />;
   }
 
   return <ResidentHomePage />;

@@ -13,8 +13,10 @@ import {
   BULLETIN_MODULE_KEY,
   CHAT_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
+  canUseResidentAppBackend,
   getChatSettings,
   getDeliverySettings,
+  isSiteOwnerProfile,
   listBulletin,
   listChatThreads,
   listDeliveries,
@@ -41,12 +43,22 @@ export function useResidentNotificationCenter() {
       resident.tenant_uuid,
     ],
   );
+  const isSiteOwner = isSiteOwnerProfile(resident);
+  const canUseResidentAppRequests = canUseResidentAppBackend(
+    snapshot,
+    resident,
+  );
   const [readMap, setReadMap] = useState(() =>
     readNotificationReadMap(notificationScope),
   );
-  const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
-  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
-  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  const hasBulletinModule =
+    canUseResidentAppRequests &&
+    sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
+  const hasChatModule =
+    canUseResidentAppRequests && sessionHasModule(snapshot, CHAT_MODULE_KEY);
+  const hasIncidentsModule =
+    canUseResidentAppRequests &&
+    sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
 
   useEffect(() => {
     setReadMap(readNotificationReadMap(notificationScope));
@@ -63,6 +75,7 @@ export function useResidentNotificationCenter() {
   const visitorsQuery = useQuery({
     queryKey: ["visitors", resident.id, snapshot.mode, connectionState],
     queryFn: () => listVisitors(snapshot, connectionState, resident),
+    enabled: canUseResidentAppRequests,
   });
 
   const deliverySettingsQuery = useQuery({
@@ -73,12 +86,14 @@ export function useResidentNotificationCenter() {
       connectionState,
     ],
     queryFn: () => getDeliverySettings(snapshot, connectionState),
+    enabled: canUseResidentAppRequests,
   });
 
   const deliveriesQuery = useQuery({
     queryKey: ["deliveries", resident.id, snapshot.mode, connectionState],
     queryFn: () => listDeliveries(snapshot, connectionState, resident),
     enabled:
+      canUseResidentAppRequests &&
       resident.role === "MORADOR" &&
       deliverySettingsQuery.data?.enabled !== false,
   });
@@ -147,14 +162,14 @@ export function useResidentNotificationCenter() {
   const attentionCounts = useMemo(
     () => ({
       visitors:
-        resident.role === "SINDICO"
+        isSiteOwner || resident.role === "SINDICO"
           ? 0
           : (visitorsQuery.data ?? []).filter(
               (visitor) =>
                 visitor.current_registration?.status === "PENDING_APPROVAL",
             ).length,
       deliveries:
-        resident.role !== "MORADOR"
+        isSiteOwner || resident.role !== "MORADOR"
           ? 0
           : (deliveriesQuery.data ?? []).filter(
               (delivery) =>
@@ -181,6 +196,8 @@ export function useResidentNotificationCenter() {
       deliveriesQuery.data,
       incidentsQuery.data,
       hasIncidentsModule,
+      isSiteOwner,
+      canUseResidentAppRequests,
       resident.role,
       unreadByModule.BULLETIN,
       unreadCount,

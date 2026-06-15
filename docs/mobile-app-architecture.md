@@ -68,6 +68,58 @@ Impacto pratico:
 - o formulario de autenticacao agora aceita submit por `Enter`, alinhando o app
   ao fluxo real de login AccessOS
 
+## Atualizacao 2026-06-15 - Home gerencial do dono do site
+
+Foi adicionada uma experiencia separada para contas AccessOS com contexto
+`APP_USER OWNER`. Esse contexto representa o dono do site convidado pelo
+Management e nao uma pessoa cadastrada no site.
+
+### Regras de produto
+
+- o dono do site e tratado como usuario de gerencia, nao como morador, sindico
+  ou pessoa vinculada;
+- a primeira entrega e somente leitura;
+- nao existem acoes de visitantes, reservas, cadastro de pessoas ou acesso
+  fisico para esse perfil;
+- a navegacao inicial fica restrita a `Inicio` e `Perfil`;
+- `MANAGER` e `SUPPORT` permanecem fora dessa experiencia.
+
+### Home gerencial
+
+Quando o contexto ativo da sessao e `APP_USER OWNER`, a rota inicial do app
+renderiza a Home Gerencial do Site.
+
+Dados consumidos:
+
+```http
+GET /access-os/site/overview
+```
+
+O endpoint retorna nome do site, tenant/empresa, papel do usuario e indicadores
+operacionais basicos:
+
+- dispositivos;
+- cameras;
+- controladores;
+- locais.
+
+A tela possui estados de loading, erro e vazio. Se alguma metrica ainda nao
+tiver fonte confiavel, ela pode aparecer como zero ou indisponivel sem bloquear
+a tela.
+
+### Protecao de rotas
+
+Para `APP_USER OWNER`, rotas historicas da jornada residencial ou operacional do
+app sao redirecionadas para a Home Gerencial. Exemplos validados:
+
+- `/access-os/visitors`;
+- `/access-os/common-areas`;
+- `/access-os/chat`;
+- `/access-os/incidents`.
+
+`/access-os/profile` permanece liberada e mostra a conta, o site ativo e o
+perfil `Gerencia somente leitura`.
+
 ## Atualizacao do contrato de autenticacao
 
 Onde este documento ainda mencionar `person-app`, leia como contrato legado. O

@@ -161,6 +161,43 @@ Verifique:
   - `resident-app/common-areas`
   - `resident-app/reservations`
 
+## Validacao do dono do site
+
+Para validar a primeira visao gerencial do dono do site:
+
+1. no Management, acesse `/peoples/access-os-invites`;
+2. selecione o site ativo desejado;
+3. na secao `Usuarios do app`, informe o e-mail do dono;
+4. confirme que o campo `Papel` esta fixo como `Dono do site`;
+5. envie o convite;
+6. crie ou acesse uma conta AccessOS com o mesmo e-mail;
+7. se o envio real de e-mail nao estiver disponivel, use o fallback do backend:
+   - consultar `outbox_events.payload.context.verification_code`;
+   - ou ler o log `LogEmailTransport` do backend;
+8. aceite o token do convite;
+9. entre no app em `/access-os/`.
+
+Resultado esperado:
+
+- a home mostra `Gerencia do site`;
+- o titulo principal e o nome do site;
+- o papel mostrado e `Dono do site`;
+- os indicadores operacionais aparecem em modo somente leitura;
+- a navegacao inferior mostra apenas `Inicio` e `Perfil`;
+- `/access-os/profile` abre a conta e o site ativo;
+- acessos diretos a `/access-os/visitors`, `/access-os/common-areas`,
+  `/access-os/chat` e `/access-os/incidents` redirecionam para `/access-os/`;
+- nao devem aparecer acoes de visitante, reserva, cadastro de pessoas, morador,
+  sindico ou condominio nessa visao gerencial.
+
+Validacoes de API recomendadas:
+
+- `GET /access-os/site/overview` deve responder `200` apenas para contexto
+  ativo `APP_USER OWNER`;
+- contexto `PERSON`, `APP_USER MANAGER`, `APP_USER SUPPORT`, sem contexto ou
+  com outro `site_id` deve ser recusado;
+- o resumo deve retornar apenas dados do site do contexto ativo.
+
 ## Atualizacao 2026-06-07
 
 - o app nao alterna mais para modo `preview`; toda validacao deve assumir

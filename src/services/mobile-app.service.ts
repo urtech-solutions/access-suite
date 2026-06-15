@@ -43,6 +43,7 @@ import type {
   ReservationEntry,
   SendIncidentMessageInput,
   SessionSnapshot,
+  SiteOwnerOverview,
   UpdateReservationHeadcountInput,
   VisitorEntry,
   VisitorModuleSettings,
@@ -816,7 +817,7 @@ export function mapResidentContextToProfile(
     unit_label: trimValue(context.unit_label) || null,
     context_label: trimValue(context.context_label) || siteName,
     avatar: buildResidentAvatar(context.person_name),
-    tag: "CONDOMINIO",
+    tag: context.profile_type === "APP_USER" ? "SITE" : "CONDOMINIO",
   };
 }
 
@@ -982,7 +983,8 @@ function isOnlineBackend(
   return (
     snapshot.mode === "backend" &&
     Boolean(snapshot.token) &&
-    Boolean(snapshot.residentAuth?.account_uuid)
+    Boolean(snapshot.residentAuth?.account_uuid) &&
+    hasAccessOsTokenActiveContext(snapshot)
   );
 }
 
@@ -1000,6 +1002,66 @@ export function isBackendAuthenticated(snapshot: SessionSnapshot) {
     snapshot.mode === "backend" &&
     Boolean(snapshot.token) &&
     Boolean(snapshot.residentAuth?.account_uuid)
+  );
+}
+
+function decodeAccessOsTokenPayload(token?: string | null) {
+  const payloadPart = String(token ?? "").split(".")[1];
+  if (!payloadPart) {
+    return null;
+  }
+
+  try {
+    const base64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(
+      base64.length + ((4 - (base64.length % 4)) % 4),
+      "=",
+    );
+    if (typeof globalThis.atob !== "function") {
+      return null;
+    }
+
+    return JSON.parse(globalThis.atob(padded)) as {
+      active_context?: {
+        context_key?: unknown;
+        context_type?: unknown;
+        person_id?: unknown;
+        tenant_uuid?: unknown;
+      } | null;
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function hasAccessOsTokenActiveContext(snapshot: SessionSnapshot) {
+  const activeContext = decodeAccessOsTokenPayload(snapshot.token)
+    ?.active_context;
+
+  return Boolean(
+    activeContext &&
+      typeof activeContext.context_key === "string" &&
+      typeof activeContext.context_type === "string" &&
+      typeof activeContext.tenant_uuid === "string",
+  );
+}
+
+export function canUseResidentAppBackend(
+  snapshot: SessionSnapshot,
+  resident?: ResidentProfile | null,
+) {
+  return (
+    isBackendAuthenticated(snapshot) &&
+    Boolean(snapshot.residentAuth?.active_context) &&
+    hasAccessOsTokenActiveContext(snapshot) &&
+    !isSiteOwnerProfile(resident)
+  );
+}
+
+export function isSiteOwnerProfile(resident?: ResidentProfile | null) {
+  return (
+    resident?.profile_type === "APP_USER" &&
+    String(resident.role ?? "").trim().toUpperCase() === "OWNER"
   );
 }
 
@@ -1208,6 +1270,17 @@ export async function hydrateBackendSession(snapshot: SessionSnapshot) {
   );
 
   return applySessionIdentity(snapshot, response);
+}
+
+export async function getSiteOwnerOverview(snapshot: SessionSnapshot) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessao AccessOS nao autenticada.");
+  }
+
+  return requestJson<SiteOwnerOverview>("/access-os/site/overview", {
+    baseUrl: snapshot.apiBaseUrl,
+    token: snapshot.token,
+  });
 }
 
 // Morador troca a própria senha do app (substitui a senha inicial padrão).

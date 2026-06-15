@@ -6,6 +6,8 @@ import { useSession } from "@/features/session/SessionProvider";
 import {
   CHAT_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
+  canUseResidentAppBackend,
+  isSiteOwnerProfile,
   sessionHasModule,
 } from "@/services/mobile-app.service";
 
@@ -61,19 +63,29 @@ function isNewEvent(
 export function ResidentRealtimeBridge() {
   const queryClient = useQueryClient();
   const { snapshot, resident, isAuthenticated } = useSession();
+  const isSiteOwner = isSiteOwnerProfile(resident);
+  const canUseResidentAppRequests = canUseResidentAppBackend(
+    snapshot,
+    resident,
+  );
   const seenEventsRef = useRef<Set<string>>(new Set());
   const socketBaseUrl = useMemo(
     () => resolveSocketBaseUrl(snapshot.apiBaseUrl),
     [snapshot.apiBaseUrl],
   );
-  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
-  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  const hasChatModule =
+    canUseResidentAppRequests && sessionHasModule(snapshot, CHAT_MODULE_KEY);
+  const hasIncidentsModule =
+    canUseResidentAppRequests &&
+    sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
 
   useEffect(() => {
     if (
       snapshot.mode !== "backend" ||
       !isAuthenticated ||
       !snapshot.token ||
+      isSiteOwner ||
+      !canUseResidentAppRequests ||
       !resident.site_id
     ) {
       return undefined;
@@ -155,6 +167,8 @@ export function ResidentRealtimeBridge() {
     resident.site_id,
     hasChatModule,
     hasIncidentsModule,
+    isSiteOwner,
+    canUseResidentAppRequests,
     snapshot.mode,
     snapshot.token,
     socketBaseUrl,

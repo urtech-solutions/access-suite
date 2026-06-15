@@ -36,7 +36,10 @@ import { ResidenceContextToggle } from "@/features/session/ActiveResidenceSwitch
 import { ConnectivityPill } from "@/features/shared/ConnectivityPill";
 import { useSession } from "@/features/session/SessionProvider";
 import { formatResidentContextMeta } from "@/features/session/resident-context";
-import { changeResidentPassword } from "@/services/mobile-app.service";
+import {
+  changeResidentPassword,
+  isSiteOwnerProfile,
+} from "@/services/mobile-app.service";
 
 function avatarStorageKey(residentId: number) {
   return `sv-mobile:avatar:${residentId}`;
@@ -207,6 +210,157 @@ const LimitedProfilePage = () => {
             </Button>
           )}
         </div>
+      </div>
+    </div>
+  );
+};
+
+const SiteOwnerProfilePage = () => {
+  const navigate = useNavigate();
+  const {
+    resident,
+    snapshot,
+    isAuthenticated,
+    disconnectBackend,
+  } = useSession();
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  async function handleChangePassword() {
+    if (newPassword.length < 4) {
+      toast.error("A nova senha deve ter ao menos 4 caracteres.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error("A confirmacao nao corresponde a nova senha.");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await changeResidentPassword(newPassword, snapshot);
+      toast.success("Senha alterada com sucesso.");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch {
+      toast.error("Nao foi possivel alterar a senha.");
+    } finally {
+      setChangingPassword(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col bg-background">
+      <div className="px-4 pt-5">
+        <div className="relative overflow-hidden rounded-3xl border border-primary/10 bg-primary pb-6 pt-4 text-primary-foreground shadow-xl shadow-primary/15">
+          <div className="absolute inset-x-0 top-0 h-32 bg-[radial-gradient(ellipse_at_top_right,rgba(250,204,21,0.25),transparent_55%)]" />
+
+          <div className="relative z-10 flex items-center gap-3 px-4">
+            <button
+              onClick={() => navigate("/")}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/20"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <h1 className="text-base font-semibold">Conta</h1>
+          </div>
+
+          <div className="relative z-10 flex items-center gap-3 px-4 pt-6">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-primary-foreground/15 text-lg font-bold text-primary-foreground shadow-lg shadow-black/20 ring-4 ring-primary-foreground/10">
+              {(snapshot.user?.name?.trim() || "U").slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <h2 className="truncate text-xl font-bold">
+                {snapshot.user?.name?.trim() || "Usuario AccessOS"}
+              </h2>
+              <p className="mt-0.5 truncate text-sm text-primary-foreground/65">
+                {snapshot.user?.email ?? "E-mail nao informado"}
+              </p>
+              <p className="mt-2 inline-flex rounded-full bg-primary-foreground/12 px-2.5 py-1 text-xs font-semibold text-primary-foreground/80">
+                Dono do site
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col gap-4 px-4 py-5">
+        <div className="overflow-hidden rounded-[24px] border border-border bg-card shadow-sm">
+          <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-primary/10 text-primary">
+              <Building2 className="h-4 w-4" />
+            </div>
+            <p className="text-sm font-semibold text-foreground">
+              Site ativo
+            </p>
+          </div>
+          <div className="space-y-2 p-4 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Nome</span>
+              <span className="truncate font-semibold text-foreground">
+                {resident?.site_name ?? "Site"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Empresa</span>
+              <span className="truncate font-semibold text-foreground">
+                {resident?.tenant_name ?? "AccessOS"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Perfil</span>
+              <span className="font-semibold text-foreground">
+                Gerencia somente leitura
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-[24px] border border-border bg-card shadow-sm">
+          <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-muted text-muted-foreground">
+              <KeyRound className="h-4 w-4" />
+            </div>
+            <p className="text-sm font-semibold text-foreground">
+              Senha da conta
+            </p>
+          </div>
+          <div className="space-y-2 p-4">
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Nova senha"
+              className="h-12 rounded-[16px]"
+            />
+            <Input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Confirmar nova senha"
+              className="h-12 rounded-[16px]"
+            />
+            <Button
+              variant="secondary"
+              className="w-full rounded-[16px]"
+              onClick={handleChangePassword}
+              disabled={changingPassword || !snapshot.token}
+            >
+              {changingPassword ? "Salvando..." : "Salvar nova senha"}
+            </Button>
+          </div>
+        </div>
+
+        {isAuthenticated && (
+          <Button
+            variant="destructive"
+            className="w-full rounded-[18px]"
+            onClick={disconnectBackend}
+          >
+            <LogOut className="h-4 w-4" />
+            Sair da conta
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -536,6 +690,10 @@ const ProfilePage = () => {
 
   if (!resident) {
     return <LimitedProfilePage />;
+  }
+
+  if (isSiteOwnerProfile(resident)) {
+    return <SiteOwnerProfilePage />;
   }
 
   return <ResidentProfilePage />;

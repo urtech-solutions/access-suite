@@ -217,15 +217,27 @@ const LimitedProfilePage = () => {
 
 const SiteOwnerProfilePage = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const {
     resident,
+    residents,
     snapshot,
     isAuthenticated,
+    isHydratingSession,
+    switchResident,
     disconnectBackend,
+    refreshResidents,
+    refreshSession,
   } = useSession();
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
+
+  async function handleRefreshContexts() {
+    await refreshSession();
+    await refreshResidents();
+    queryClient.invalidateQueries();
+  }
 
   async function handleChangePassword() {
     if (newPassword.length < 4) {
@@ -277,7 +289,13 @@ const SiteOwnerProfilePage = () => {
                 {snapshot.user?.email ?? "E-mail nao informado"}
               </p>
               <p className="mt-2 inline-flex rounded-full bg-primary-foreground/12 px-2.5 py-1 text-xs font-semibold text-primary-foreground/80">
-                Dono do site
+                {resident?.role === "OWNER"
+                  ? "Dono do site"
+                  : resident?.role === "MANAGER"
+                    ? "Gestor do site"
+                    : resident?.role === "SUPPORT"
+                      ? "Suporte operacional"
+                      : "Conta AccessOS"}
               </p>
             </div>
           </div>
@@ -285,6 +303,23 @@ const SiteOwnerProfilePage = () => {
       </div>
 
       <div className="flex flex-1 flex-col gap-4 px-4 py-5">
+        <button
+          type="button"
+          onClick={() => navigate("/access-invites")}
+          className="flex w-full items-center gap-3 rounded-[24px] border border-border bg-card p-4 text-left shadow-sm transition-colors active:scale-[0.98] hover:bg-muted/30"
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <Building2 className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-foreground">Meus convites</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Veja convites encontrados e aceite tokens manualmente.
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </button>
+
         <div className="overflow-hidden rounded-[24px] border border-border bg-card shadow-sm">
           <div className="flex items-center gap-3 border-b border-border/50 px-4 py-3.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-primary/10 text-primary">
@@ -295,6 +330,40 @@ const SiteOwnerProfilePage = () => {
             </p>
           </div>
           <div className="space-y-2 p-4 text-sm">
+            <ResidenceContextToggle variant="card" />
+            <div className="space-y-2 rounded-[18px] border border-border/60 bg-muted/20 p-3">
+              <Select
+                value={resident?.context_key ?? ""}
+                onValueChange={(value) => {
+                  void switchResident(value);
+                }}
+                disabled={!isAuthenticated || isHydratingSession}
+              >
+                <SelectTrigger className="rounded-[14px]">
+                  <SelectValue placeholder="Selecione um contexto" />
+                </SelectTrigger>
+                <SelectContent>
+                  {residents.map((item) => (
+                    <SelectItem
+                      key={item.context_key ?? `${item.site_id}:${item.id}`}
+                      value={item.context_key ?? ""}
+                    >
+                      {item.site_name} · {formatResidentContextMeta(item)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="rounded-full"
+                disabled={!isAuthenticated || isHydratingSession}
+                onClick={handleRefreshContexts}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Atualizar
+              </Button>
+            </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-muted-foreground">Nome</span>
               <span className="truncate font-semibold text-foreground">
@@ -310,7 +379,13 @@ const SiteOwnerProfilePage = () => {
             <div className="flex items-center justify-between gap-3">
               <span className="text-muted-foreground">Perfil</span>
               <span className="font-semibold text-foreground">
-                Gerencia somente leitura
+                {resident?.role === "OWNER"
+                  ? "Dono do site"
+                  : resident?.role === "MANAGER"
+                    ? "Gestor do site"
+                    : resident?.role === "SUPPORT"
+                      ? "Suporte operacional"
+                      : "Conta AccessOS"}
               </span>
             </div>
           </div>
@@ -549,9 +624,9 @@ const ResidentProfilePage = () => {
             <ResidenceContextToggle variant="card" />
             <div className="space-y-2">
               <Select
-                value={String(resident.id)}
+                value={resident.context_key ?? ""}
                 onValueChange={(value) => {
-                  void switchResident(Number(value));
+                  void switchResident(value);
                 }}
                 disabled={snapshot.mode === "backend" && !isAuthenticated}
               >
@@ -560,12 +635,15 @@ const ResidentProfilePage = () => {
                 </SelectTrigger>
                 <SelectContent>
                   {residents.length === 0 ? (
-                    <SelectItem value={String(resident.id)}>
+                    <SelectItem value={resident.context_key ?? "current-context"}>
                       Nenhum contexto disponível
                     </SelectItem>
                   ) : (
                     residents.map((item) => (
-                      <SelectItem key={item.id} value={String(item.id)}>
+                      <SelectItem
+                        key={item.context_key ?? `${item.site_id}:${item.id}`}
+                        value={item.context_key ?? ""}
+                      >
                         {item.site_name} · {formatResidentContextMeta(item)}
                       </SelectItem>
                     ))

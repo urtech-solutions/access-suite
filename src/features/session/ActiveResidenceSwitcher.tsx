@@ -38,17 +38,20 @@ export function ResidenceContextToggle({
     null,
   );
   const canSwitch = residents.length > 1;
+  const isSiteScopedContext =
+    resident.profile_type === "APP_USER" || resident.role === "SINDICO";
 
-  async function handleSwitch(nextResidentId: number) {
-    if (nextResidentId === resident.id) {
+  async function handleSwitch(nextContextKey: string) {
+    if (nextContextKey === resident.context_key) {
       setOpen(false);
       return;
     }
 
-    setSwitchingResidentId(nextResidentId);
+    const nextResident = residents.find((item) => item.context_key === nextContextKey);
+    setSwitchingResidentId(nextResident?.id ?? null);
 
     try {
-      await switchResident(nextResidentId);
+      await switchResident(nextContextKey);
       setOpen(false);
     } catch (error) {
       toast.error(
@@ -62,16 +65,15 @@ export function ResidenceContextToggle({
   }
 
   const isHero = variant === "hero";
-  const activeLabel = resident.role === "SINDICO" ? "Site Ativo" : "Casa Ativa";
-  const canSwitchLabel =
-    resident.role === "SINDICO" ? "Multi-site" : "Multi-residência";
+  const activeLabel = isSiteScopedContext ? "Site ativo" : "Casa ativa";
+  const canSwitchLabel = isSiteScopedContext ? "Multi-site" : "Multi-residência";
   const sheetTitle =
-    resident.role === "SINDICO"
-      ? "Escolha qual site deseja operar"
+    isSiteScopedContext
+      ? "Escolha qual site ou entidade deseja operar"
       : "Escolha qual casa deseja operar";
   const sheetDescription =
-    resident.role === "SINDICO"
-      ? "O login pertence ao CPF. O painel ativo muda conforme o site selecionado para a atuação de síndico."
+    isSiteScopedContext
+      ? "A mesma conta AccessOS pode operar múltiplos sites e perfis. O contexto ativo muda sem exigir novo login."
       : "O login pertence ao CPF. O painel ativo muda conforme o prédio, casa ou apartamento selecionado.";
 
   return (
@@ -182,7 +184,7 @@ export function ResidenceContextToggle({
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => void handleSwitch(item.id)}
+                  onClick={() => void handleSwitch(item.context_key ?? "")}
                   disabled={Boolean(switchingResidentId)}
                   className={cn(
                     "w-full rounded-[24px] border p-4 text-left transition-all",

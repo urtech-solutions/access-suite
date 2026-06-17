@@ -17,6 +17,7 @@ import {
   acceptAccessOsInvite,
   readSessionSnapshot,
   registerAccessOsAccount,
+  selectAccessOsContext,
   unregisterResidentPushSubscription,
   saveSessionSnapshot,
 } from "@/services/mobile-app.service";
@@ -40,7 +41,7 @@ type SessionContextValue = {
   isConnecting: boolean;
   isHydratingSession: boolean;
   isAuthenticated: boolean;
-  switchResident: (residentId: number) => Promise<void>;
+  switchResident: (contextKey: string) => Promise<void>;
   connectBackend: (credentials: ResidentAppCredentials) => Promise<SessionSnapshot>;
   registerAccessOs: (
     payload: AccessOsRegisterInput,
@@ -59,7 +60,15 @@ function resolveResident(
   snapshot: SessionSnapshot,
   residents: ResidentProfile[],
 ): ResidentProfile | null {
+  const activeContextKey = snapshot.residentAuth?.active_context?.context_key ?? null;
+
   return (
+    residents.find(
+      (item) =>
+        Boolean(activeContextKey) &&
+        Boolean(item.context_key) &&
+        item.context_key === activeContextKey,
+    ) ??
     residents.find((item) => item.id === snapshot.resident?.id) ??
     snapshot.resident ??
     residents[0] ??
@@ -165,18 +174,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const resident = resolveResident(snapshot, residents);
   const isAuthenticated = isBackendAuthenticated(snapshot);
 
-  async function switchResident(residentId: number) {
-    if (snapshot.mode === "backend" && isAuthenticated) {
-      if (snapshot.resident?.id === residentId) {
-        return;
-      }
-      toast.message(
-        "Para trocar de unidade, saia e entre novamente escolhendo outro contexto.",
-      );
+  async function switchResident(contextKey: string) {
+    const normalizedContextKey = String(contextKey ?? "").trim();
+    if (!normalizedContextKey) {
       return;
     }
 
-    const nextResident = residents.find((item) => item.id === residentId);
+    if (snapshot.mode === "backend" && isAuthenticated) {
+      if (snapshot.resident?.context_key === normalizedContextKey) {
+        return;
+      }
+
+      const next = await selectAccessOsContext(snapshot, normalizedContextKey);
+      setSnapshot(next);
+      setResidents(await loadBackendResidents(next));
+      return;
+    }
+
+    const nextResident = residents.find(
+      (item) => String(item.context_key ?? "").trim() === normalizedContextKey,
+    );
     if (!nextResident) return;
     const next = { ...snapshot, resident: nextResident };
     setSnapshot(next);

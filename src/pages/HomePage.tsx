@@ -19,8 +19,8 @@ import {
   Server,
   Shield,
   TicketCheck,
-  UserRound,
   Users,
+  UserRound,
   Wallet,
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -420,14 +420,17 @@ const ResidentHomePage = () => {
   const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
   const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
 
-  async function handleSwitchContext(nextId: number) {
-    if (nextId === resident.id) {
+  async function handleSwitchContext(nextContextKey: string) {
+    if (nextContextKey === resident.context_key) {
       setContextSheetOpen(false);
       return;
     }
-    setSwitchingId(nextId);
+    const nextResident = residents.find(
+      (item) => item.context_key === nextContextKey,
+    );
+    setSwitchingId(nextResident?.id ?? null);
     try {
-      await switchResident(nextId);
+      await switchResident(nextContextKey);
       setContextSheetOpen(false);
     } catch (err) {
       toast.error(
@@ -880,7 +883,7 @@ const ResidentHomePage = () => {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => void handleSwitchContext(item.id)}
+                  onClick={() => void handleSwitchContext(item.context_key ?? "")}
                   disabled={Boolean(switchingId)}
                   className={cn(
                     "w-full rounded-2xl border p-4 text-left transition-all",

@@ -131,7 +131,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     if (Date.now() < iceExpiresAtRef.current - ICE_REFRESH_MARGIN_MS) return;
     try {
       const resolvedBase = apiBaseUrl.replace(/\/api\/?$/, "") || window.location.origin;
-      const url = `${resolvedBase}/api/chat/calls/ice-servers`;
+      const url = `${resolvedBase}/api/chat/app/calls/ice-servers`;
       const res = await fetch(url, {
         headers: snapshot.token
           ? { Authorization: `Bearer ${snapshot.token}` }

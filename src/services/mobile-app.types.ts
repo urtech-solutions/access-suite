@@ -141,6 +141,7 @@ export interface ResidentAppUser {
 export interface ResidentProfile {
   id: number;
   context_id: number;
+  context_key?: string | null;
   profile_type?: ResidentAppProfileType;
   person_id?: number | null;
   user_uuid?: string | null;

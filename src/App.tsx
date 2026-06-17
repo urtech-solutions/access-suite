@@ -137,7 +137,9 @@ const ProtectedShell = () => {
 
   if (isSiteOwnerProfile(resident)) {
     const isAllowedOwnerRoute =
-      location.pathname === "/" || location.pathname.startsWith("/profile");
+      location.pathname === "/" ||
+      location.pathname.startsWith("/profile") ||
+      location.pathname.startsWith("/access-invites");
 
     if (!isAllowedOwnerRoute) {
       return <Navigate to="/" replace />;

@@ -328,6 +328,12 @@ function isApiStatusError(error: unknown, status: number) {
   return error instanceof ApiRequestError && error.status === status;
 }
 
+function hasResidentAppBoundContexts(snapshot: SessionSnapshot) {
+  return Boolean(
+    snapshot.residentAuth?.active_context || snapshot.residentAuth?.contexts?.length,
+  );
+}
+
 async function requestJson<T>(
   path: string,
   options: {
@@ -803,6 +809,7 @@ export function mapResidentContextToProfile(
   return {
     id: contextId,
     context_id: contextId,
+    context_key: trimValue(context.context_key) || null,
     profile_type: context.profile_type,
     person_id: context.person_id,
     user_uuid: context.user_uuid,
@@ -1192,6 +1199,32 @@ export async function acceptAccessOsInvite(
   return createBackendSnapshot(response, snapshot.apiBaseUrl);
 }
 
+export async function selectAccessOsContext(
+  snapshot: SessionSnapshot,
+  contextKey: string,
+) {
+  if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
+    throw new Error("Sessão AccessOS não autenticada.");
+  }
+
+  const normalizedContextKey = String(contextKey ?? "").trim();
+  if (!normalizedContextKey) {
+    throw new Error("Contexto AccessOS inválido.");
+  }
+
+  const response = await requestJson<PersonAppAuthResponse>(
+    "/auth/access-os/select-context",
+    {
+      baseUrl: snapshot.apiBaseUrl,
+      method: "POST",
+      token: snapshot.token,
+      body: { context_key: normalizedContextKey },
+    },
+  );
+
+  return createBackendSnapshot(response, snapshot.apiBaseUrl);
+}
+
 export async function listAccessOsInvites(snapshot: SessionSnapshot) {
   if (!snapshot.token || !snapshot.residentAuth?.account_uuid) {
     throw new Error("Sessão AccessOS não autenticada.");
@@ -1260,16 +1293,26 @@ export async function hydrateBackendSession(snapshot: SessionSnapshot) {
     return snapshot;
   }
 
-  const response = await requestJson<PersonAppMeResponse>(
-    "/auth/access-os/me",
-    {
-      baseUrl: snapshot.apiBaseUrl,
-      method: "POST",
-      token: snapshot.token,
-    },
-  );
+  try {
+    const response = await requestJson<PersonAppMeResponse>(
+      "/auth/access-os/me",
+      {
+        baseUrl: snapshot.apiBaseUrl,
+        method: "POST",
+        token: snapshot.token,
+      },
+    );
 
-  return applySessionIdentity(snapshot, response);
+    return applySessionIdentity(snapshot, response);
+  } catch (error) {
+    if (!hasResidentAppBoundContexts(snapshot) && error instanceof ApiRequestError) {
+      if (error.status === 500 || error.status === 404) {
+        return snapshot;
+      }
+    }
+
+    throw error;
+  }
 }
 
 export async function getSiteOwnerOverview(snapshot: SessionSnapshot) {
@@ -1347,11 +1390,19 @@ export async function loadBackendResidents(snapshot: SessionSnapshot) {
     return [];
   }
 
-  const contexts = snapshot.residentAuth.active_context
-    ? [snapshot.residentAuth.active_context]
+  const activeContextKey = snapshot.residentAuth.active_context?.context_key ?? null;
+  const orderedContexts = activeContextKey
+    ? [
+        ...snapshot.residentAuth.contexts.filter(
+          (context) => context.context_key === activeContextKey,
+        ),
+        ...snapshot.residentAuth.contexts.filter(
+          (context) => context.context_key !== activeContextKey,
+        ),
+      ]
     : snapshot.residentAuth.contexts;
 
-  return contexts
+  return orderedContexts
     .map((context) => mapResidentContextToProfile(context))
     .filter((resident): resident is ResidentProfile => Boolean(resident));
 }

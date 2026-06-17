@@ -36,6 +36,10 @@ export function formatResidenceUnit(
 }
 
 export function formatResidentCurrentAccess(resident: ResidentProfile) {
+  if (resident.profile_type === "APP_USER") {
+    return cleanLabel(resident.site_name) || "Site vinculado";
+  }
+
   if (resident.role === "SINDICO") {
     return cleanLabel(resident.unit_label) || "Painel de síndico";
   }
@@ -57,6 +61,15 @@ export function formatResidentContextMeta(
     | "unit_label"
   >,
 ) {
+  if (resident.profile_type === "APP_USER") {
+    return [
+      cleanLabel(resident.role) || "Acesso ao app",
+      cleanLabel(resident.tenant_name),
+    ]
+      .filter((value) => value.length > 0)
+      .join(" · ");
+  }
+
   return [
     resident.role === "SINDICO"
       ? cleanLabel(resident.unit_label) || "Painel de síndico"

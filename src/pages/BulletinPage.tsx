@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import {
   CalendarDays,
+  Clock,
   Megaphone,
   Pin,
   Shield,
@@ -27,7 +28,11 @@ import type {
 
 const tagConfig: Record<
   BulletinTag,
-  { label: string; variant: "info" | "warning" | "destructive"; icon: typeof Megaphone }
+  {
+    label: string;
+    variant: "info" | "warning" | "destructive";
+    icon: typeof Megaphone;
+  }
 > = {
   AVISO: { label: "Aviso", variant: "info", icon: Megaphone },
   NOTIFICACAO: { label: "Notificação", variant: "warning", icon: Shield },
@@ -42,7 +47,23 @@ function formatCreatedAt(value: string) {
   });
 }
 
-function resolveBulletinImageUrl(imageUrl: string | null | undefined, apiBaseUrl: string) {
+function formatExpiration(value?: string | null) {
+  if (!value) return "Sem expiração";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Sem expiração";
+  return parsed.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function resolveBulletinImageUrl(
+  imageUrl: string | null | undefined,
+  apiBaseUrl: string,
+) {
   if (!imageUrl) return undefined;
   if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
   const base = normalizeApiBaseUrl(apiBaseUrl).replace(/\/api$/, "");
@@ -69,15 +90,8 @@ const BulletinPage = () => {
   });
 
   const posts = bulletinQuery.data ?? [];
-  const pinned = posts.filter((post) => post.pinned);
-  const regular = posts.filter((post) => !post.pinned);
   const isSyndic = resident.role === "SINDICO";
   const bulletinEnabled = moduleStatusQuery.data?.enabled !== false;
-
-  const heroPost = useMemo(
-    () => pinned[0] ?? regular[0] ?? null,
-    [pinned, regular],
-  );
 
   return (
     <div className="space-y-6 px-4 pb-6 pt-8">
@@ -97,51 +111,12 @@ const BulletinPage = () => {
         </div>
       ) : null}
 
-      {bulletinEnabled && heroPost ? (
-        <section className="overflow-hidden rounded-[30px] border border-accent/30 bg-card shadow-sm">
-          {heroPost.image_url ? (
-            <BulletinImage
-              imageUrl={heroPost.image_url}
-              title={heroPost.title}
-              snapshot={snapshot}
-              className="h-56 w-full object-cover"
-            />
-          ) : null}
-          <div className="space-y-4 p-5">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={tagConfig[heroPost.tag].variant}>
-                {tagConfig[heroPost.tag].label}
-              </Badge>
-              {heroPost.pinned ? (
-                <Badge variant="secondary" className="gap-1">
-                  <Pin className="h-3 w-3" />
-                  Fixado
-                </Badge>
-              ) : null}
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">{heroPost.title}</h2>
-              <p className="mt-3 text-sm leading-6 text-muted-foreground">{heroPost.content}</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-              <span className="inline-flex items-center gap-2">
-                <CalendarDays className="h-3.5 w-3.5" />
-                {formatCreatedAt(heroPost.created_at)}
-              </span>
-              {heroPost.author_label ? <span>por {heroPost.author_label}</span> : null}
-              {heroPost.site?.name ? <span>{heroPost.site.name}</span> : null}
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      {bulletinEnabled && pinned.length > 0 ? (
+      {bulletinEnabled ? (
         <section className="space-y-3">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">
-            <Pin className="h-3.5 w-3.5" />
-            Fixados
+          <div className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">
+            Recentes
           </div>
-          {pinned.map((post, index) => (
+          {posts.map((post, index) => (
             <BulletinCard
               key={post.id}
               post={post}
@@ -149,29 +124,13 @@ const BulletinPage = () => {
               snapshot={snapshot}
             />
           ))}
+
+          {posts.length === 0 ? (
+            <div className="rounded-[24px] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
+              Nenhum aviso disponível no momento.
+            </div>
+          ) : null}
         </section>
-      ) : null}
-
-      {bulletinEnabled ? (
-      <section className="space-y-3">
-        <div className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">
-          Recentes
-        </div>
-        {regular.map((post, index) => (
-          <BulletinCard
-            key={post.id}
-            post={post}
-            index={index}
-            snapshot={snapshot}
-          />
-        ))}
-
-        {posts.length === 0 ? (
-          <div className="rounded-[24px] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
-            Nenhum aviso disponível no momento.
-          </div>
-        ) : null}
-      </section>
       ) : null}
     </div>
   );
@@ -188,6 +147,8 @@ function BulletinCard({
 }) {
   const config = tagConfig[post.tag];
   const Icon = config.icon;
+  const [expanded, setExpanded] = useState(false);
+  const canExpand = post.content.length > 180 || post.content.includes("\n");
 
   return (
     <motion.article
@@ -216,20 +177,39 @@ function BulletinCard({
         </div>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <h3 className="text-base font-semibold text-foreground">{post.title}</h3>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{post.content}</p>
+            <h3 className="text-base font-semibold text-foreground">
+              {post.title}
+            </h3>
+            <p
+              className={`mt-2 whitespace-pre-wrap text-sm leading-6 text-muted-foreground ${
+                expanded ? "" : "line-clamp-4"
+              }`}
+            >
+              {post.content}
+            </p>
+            {canExpand ? (
+              <button
+                type="button"
+                onClick={() => setExpanded((current) => !current)}
+                className="mt-2 text-xs font-semibold text-primary"
+              >
+                {expanded ? "Mostrar menos" : "Mostrar mais"}
+              </button>
+            ) : null}
           </div>
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
             <Icon className="h-4 w-4" />
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+        <div className="grid gap-1 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-2">
             <CalendarDays className="h-3.5 w-3.5" />
-            {formatCreatedAt(post.created_at)}
+            Criado em: {formatCreatedAt(post.created_at)}
           </span>
-          {post.author_label ? <span>por {post.author_label}</span> : null}
-          {post.site?.name ? <span>{post.site.name}</span> : null}
+          <span className="inline-flex items-center gap-2">
+            <Clock className="h-3.5 w-3.5" />
+            Expira em: {formatExpiration(post.expires_at)}
+          </span>
         </div>
       </div>
     </motion.article>

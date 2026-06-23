@@ -14,6 +14,7 @@ import {
   CHAT_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
   canUseResidentAppBackend,
+  getBulletinModuleStatus,
   getChatSettings,
   getDeliverySettings,
   isSiteOwnerProfile,
@@ -104,10 +105,23 @@ export function useResidentNotificationCenter() {
     enabled: hasIncidentsModule,
   });
 
+  const bulletinStatusQuery = useQuery({
+    queryKey: [
+      "bulletin-module-status",
+      resident.site_id,
+      snapshot.mode,
+      connectionState,
+    ],
+    queryFn: () => getBulletinModuleStatus(snapshot, connectionState, resident),
+    enabled: hasBulletinModule,
+  });
+  const bulletinEnabled =
+    hasBulletinModule && bulletinStatusQuery.data?.enabled !== false;
+
   const bulletinQuery = useQuery({
     queryKey: ["bulletin", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listBulletin(snapshot, connectionState, resident),
-    enabled: hasBulletinModule,
+    enabled: bulletinEnabled,
   });
 
   const chatSettingsQuery = useQuery({
@@ -195,9 +209,7 @@ export function useResidentNotificationCenter() {
       chatThreadsQuery.data,
       deliveriesQuery.data,
       incidentsQuery.data,
-      hasIncidentsModule,
       isSiteOwner,
-      canUseResidentAppRequests,
       resident.role,
       unreadByModule.BULLETIN,
       unreadCount,

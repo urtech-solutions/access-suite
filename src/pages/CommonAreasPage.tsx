@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  ArrowUpRight,
   CalendarClock,
   Clock3,
   Copy,
@@ -1438,136 +1437,25 @@ const CommonAreasPage = () => {
         </div>
 
         {areas.map((area, index) => {
-          const todaySchedule = buildAreaDaySchedule(
-            area,
-            reservations,
-            todayValue,
-          );
-          const nextFreeWindow = todaySchedule.freeWindows[0] ?? null;
-
           return (
-            <motion.div
+            <motion.button
+              type="button"
               key={area.id}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.04 }}
-              className="rounded-[28px] border border-border bg-card p-4 shadow-sm"
+              onClick={() => openAreaTimeline(area)}
+              className="w-full rounded-[28px] border border-border bg-card p-4 text-left shadow-sm transition-colors hover:border-primary/30 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-base font-semibold text-foreground">
-                    {area.name}
-                  </h2>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {area.description}
-                  </p>
-                </div>
-                <Badge
-                  variant={
-                    area.status === "ACTIVE"
-                      ? "success"
-                      : area.status === "MAINTENANCE"
-                        ? "warning"
-                        : "secondary"
-                  }
-                >
-                  {area.status === "ACTIVE"
-                    ? "Disponível"
-                    : area.status === "MAINTENANCE"
-                      ? "Manutenção"
-                      : "Fechada"}
-                </Badge>
-              </div>
-
-              <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-muted-foreground">
-                <div className="rounded-[18px] bg-muted px-3 py-2">
-                  {area.opening_time} às {area.closing_time}
-                </div>
-                <div className="rounded-[18px] bg-muted px-3 py-2">
-                  {area.requires_approval
-                    ? "Com aprovação"
-                    : "Liberação imediata"}
-                </div>
-                <div className="rounded-[18px] bg-muted px-3 py-2">
-                  Capacidade {area.capacity ?? "livre"}
-                </div>
-                <div className="rounded-[18px] bg-muted px-3 py-2">
-                  {area.max_open_requests == null
-                    ? "Reservas em aberto ilimitadas"
-                    : `${area.max_open_requests} reserva(s) em aberto`}
-                </div>
-                <div className="rounded-[18px] bg-muted px-3 py-2">
-                  {area.location
-                    ? `Entrada em ${area.location.name}`
-                    : "Sem location vinculada"}
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-[24px] border border-border/70 bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(248,250,252,0.98),rgba(16,185,129,0.06))] p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-                      Radar de hoje
-                    </p>
-                    <p className="mt-2 text-sm font-medium text-foreground">
-                      {todaySchedule.confirmedCount > 0
-                        ? `${todaySchedule.confirmedCount} faixa(s) bloqueada(s)`
-                        : "Nenhum bloqueio confirmado hoje"}
-                    </p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {nextFreeWindow
-                        ? `Proxima janela livre: ${formatTimeRange(
-                            nextFreeWindow.start,
-                            nextFreeWindow.end,
-                          )}`
-                        : "Sem janela livre restante hoje"}
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="rounded-full"
-                    onClick={() => openAreaTimeline(area)}
-                  >
-                    Abrir agenda
-                    <ArrowUpRight className="h-4 w-4" />
-                  </Button>
-                </div>
-
-                <div className="mt-4 overflow-hidden rounded-full bg-muted">
-                  <div className="relative h-3 w-full">
-                    {todaySchedule.freeWindows.map((window, freeIndex) => (
-                      <div
-                        key={`card-free-${area.id}-${freeIndex}`}
-                        className="absolute top-0 h-full bg-emerald-500/25"
-                        style={{
-                          left: `${window.top}%`,
-                          width: `${window.height}%`,
-                        }}
-                      />
-                    ))}
-                    {todaySchedule.blocks.map((block) => (
-                      <div
-                        key={`card-block-${block.reservation.id}`}
-                        className={`absolute top-0 h-full ${
-                          block.blocking ? "bg-amber-500/70" : "bg-warning/60"
-                        }`}
-                        style={{
-                          left: `${block.top}%`,
-                          width: `${block.height}%`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {area.rules ? (
-                <p className="mt-3 text-sm text-muted-foreground">
-                  {area.rules}
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-foreground">
+                  {area.name}
+                </h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {area.description}
                 </p>
-              ) : null}
-            </motion.div>
+              </div>
+            </motion.button>
           );
         })}
       </section>

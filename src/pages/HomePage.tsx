@@ -54,6 +54,7 @@ import {
 import {
   BULLETIN_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
+  getBulletinModuleStatus,
   getDeliverySettings,
   getSiteOwnerOverview,
   isSiteOwnerProfile,
@@ -90,11 +91,7 @@ function getInviteTokenFromUrl() {
 
 const LimitedHomePage = () => {
   const navigate = useNavigate();
-  const {
-    snapshot,
-    acceptAccessOsInvite,
-    isConnecting,
-  } = useSession();
+  const { snapshot, acceptAccessOsInvite, isConnecting } = useSession();
   const [token, setToken] = useState(getInviteTokenFromUrl);
   const [message, setMessage] = useState("");
 
@@ -217,11 +214,11 @@ const SiteOwnerHomePage = () => {
 
   const overview = overviewQuery.data;
   const siteName = overview?.site.name ?? resident?.site_name ?? "Site";
-  const tenantName = overview?.tenant.name ?? resident?.tenant_name ?? "AccessOS";
-  const locationLabel = [
-    overview?.site.city,
-    overview?.site.state,
-  ].filter(Boolean).join(" - ");
+  const tenantName =
+    overview?.tenant.name ?? resident?.tenant_name ?? "AccessOS";
+  const locationLabel = [overview?.site.city, overview?.site.state]
+    .filter(Boolean)
+    .join(" - ");
   const updatedAt = overview?.site.updated_at
     ? new Date(overview.site.updated_at).toLocaleString("pt-BR", {
         day: "2-digit",
@@ -446,10 +443,23 @@ const ResidentHomePage = () => {
     queryFn: () => listVisitors(snapshot, connectionState, resident),
   });
 
+  const bulletinStatusQuery = useQuery({
+    queryKey: [
+      "bulletin-module-status",
+      resident.site_id,
+      snapshot.mode,
+      connectionState,
+    ],
+    queryFn: () => getBulletinModuleStatus(snapshot, connectionState, resident),
+    enabled: hasBulletinModule,
+  });
+  const bulletinEnabled =
+    hasBulletinModule && bulletinStatusQuery.data?.enabled !== false;
+
   const bulletinQuery = useQuery({
     queryKey: ["bulletin", resident.site_id, snapshot.mode, connectionState],
     queryFn: () => listBulletin(snapshot, connectionState, resident),
-    enabled: hasBulletinModule,
+    enabled: bulletinEnabled,
   });
 
   const reservationsQuery = useQuery({
@@ -530,7 +540,7 @@ const ResidentHomePage = () => {
           },
         ]
       : []),
-    ...(hasBulletinModule
+    ...(bulletinEnabled
       ? [
           {
             icon: Megaphone,
@@ -553,8 +563,10 @@ const ResidentHomePage = () => {
   ];
 
   const deliveries = deliveriesQuery.data ?? [];
-  const pinnedNotice =
-    bulletinQuery.data?.find((item) => item.pinned) ?? bulletinQuery.data?.[0];
+  const pinnedNotice = bulletinEnabled
+    ? (bulletinQuery.data?.find((item) => item.pinned) ??
+      bulletinQuery.data?.[0])
+    : null;
   const unreadNotificationCount = unreadCount;
   const pendingApprovalCount = attentionCounts.visitors;
   const monitoringCount = Math.max(
@@ -635,9 +647,7 @@ const ResidentHomePage = () => {
               <Bell className="h-5 w-5" />
               {unreadNotificationCount > 0 && (
                 <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-slate-900 shadow-sm">
-                  {unreadNotificationCount > 9
-                    ? "9+"
-                    : unreadNotificationCount}
+                  {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
                 </span>
               )}
             </Button>
@@ -709,28 +719,28 @@ const ResidentHomePage = () => {
       {/* ─── 3. Banners de atenção ─── */}
       {notificationPermission !== "granted" &&
         notificationPermission !== "unsupported" && (
-        <motion.button
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.03 }}
-          type="button"
-          onClick={() => void handleNotificationPermission()}
-          className="w-full rounded-2xl border border-border/70 bg-card p-3.5 text-left shadow-sm transition-colors active:scale-[0.98] hover:bg-muted/30"
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <Bell className="h-4 w-4" />
+          <motion.button
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.03 }}
+            type="button"
+            onClick={() => void handleNotificationPermission()}
+            className="w-full rounded-2xl border border-border/70 bg-card p-3.5 text-left shadow-sm transition-colors active:scale-[0.98] hover:bg-muted/30"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Bell className="h-4 w-4" />
+              </div>
+              <p className="text-[12px] font-medium text-foreground">
+                {notificationPermission === "default"
+                  ? "Toque para ativar notificações"
+                  : notificationPermission === "insecure"
+                    ? "HTTPS necessário para alertas"
+                    : "Notificações bloqueadas"}
+              </p>
             </div>
-            <p className="text-[12px] font-medium text-foreground">
-              {notificationPermission === "default"
-                ? "Toque para ativar notificações"
-                : notificationPermission === "insecure"
-                  ? "HTTPS necessário para alertas"
-                  : "Notificações bloqueadas"}
-            </p>
-          </div>
-        </motion.button>
-      )}
+          </motion.button>
+        )}
 
       {(pendingApprovalCount > 0 || unreadNotificationCount > 0) && (
         <motion.button

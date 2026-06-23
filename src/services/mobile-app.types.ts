@@ -1,6 +1,11 @@
 export type SessionMode = "backend";
 
-export type ResidentRole = "MANAGER" | "MORADOR" | "OWNER" | "SINDICO" | "SUPPORT";
+export type ResidentRole =
+  | "MANAGER"
+  | "MORADOR"
+  | "OWNER"
+  | "SINDICO"
+  | "SUPPORT";
 export type ResidentAppProfileType = "APP_USER" | "RESIDENT" | "SYNDIC";
 
 export type ConnectionState = "online" | "offline";
@@ -194,7 +199,11 @@ export interface SiteOwnerOverview {
   };
 }
 
-export type AccessOsInviteStatus = "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED";
+export type AccessOsInviteStatus =
+  | "PENDING"
+  | "ACCEPTED"
+  | "REJECTED"
+  | "EXPIRED";
 
 export type AccessOsInviteMatchMethod = "EMAIL_CPF" | "TOKEN";
 
@@ -427,6 +436,7 @@ export interface BulletinPost {
 export interface BulletinModuleStatus {
   enabled: boolean;
   module: "BULLETIN" | string;
+  site_id?: number | null;
   tenant_uuid: string;
 }
 

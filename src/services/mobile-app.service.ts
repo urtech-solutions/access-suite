@@ -11,6 +11,7 @@ import type {
   ChatModuleSettings,
   ChatThread,
   CommonArea,
+  CommonAreaCalendar,
   ConnectionState,
   AccessOsRegisterInput,
   AccessOsForgotPasswordResponse,
@@ -217,6 +218,10 @@ function visitorLinkCacheKey(visitorId: number) {
 
 function reservationLinkCacheKey(reservationId: number) {
   return cacheKey(`reservation-link:${reservationId}`);
+}
+
+function commonAreaCalendarCacheKey(areaId: number, from: string, to: string) {
+  return cacheKey(`common-area-calendar:${areaId}:${from}:${to}`);
 }
 
 function generateId() {
@@ -2880,6 +2885,44 @@ export async function listCommonAreas(
     return areas;
   } catch {
     return readResidentScopedFallback("common-areas", [] as CommonArea[]);
+  }
+}
+
+export async function getCommonAreaCalendar(
+  snapshot: SessionSnapshot,
+  connectionState: ConnectionState,
+  areaId: number,
+  filters: {
+    from: string;
+    to?: string;
+  },
+) {
+  const from = filters.from;
+  const to = filters.to ?? filters.from;
+  const fallback = readCache<CommonAreaCalendar | null>(
+    commonAreaCalendarCacheKey(areaId, from, to),
+    null,
+  );
+
+  if (
+    isResidentAppModuleRequestDisabled(COMMON_AREAS_MODULE_KEY) ||
+    !canAttemptBackendRequest(snapshot)
+  ) {
+    return fallback;
+  }
+
+  try {
+    const calendar = await requestJson<CommonAreaCalendar>(
+      `/resident-app/common-areas/${areaId}/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      {
+        baseUrl: snapshot.apiBaseUrl,
+        token: snapshot.token,
+      },
+    );
+    writeCache(commonAreaCalendarCacheKey(areaId, from, to), calendar);
+    return calendar;
+  } catch {
+    return fallback;
   }
 }
 

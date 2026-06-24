@@ -9,6 +9,7 @@ import {
   createReservation,
   createVisitor,
   disconnectBackendSession,
+  getCommonAreaCalendar,
   getDeliverySettings,
   getDeliveryPhotoBlob,
   getDelivery,
@@ -35,6 +36,7 @@ import {
 } from "@/services/mobile-app.service";
 import type {
   CommonArea,
+  CommonAreaCalendar,
   ReservationEntry,
   ResidentProfile,
   SessionSnapshot,
@@ -775,6 +777,100 @@ describe("mobile-app service", () => {
           reserved_from: "2026-03-20T18:00:00",
           reserved_until: "2026-03-20T21:00:00",
           guest_count: 20,
+        }),
+      }),
+    );
+  });
+
+  it("loads the effective day calendar for a common area", async () => {
+    const snapshot: SessionSnapshot = {
+      mode: "backend",
+      apiBaseUrl: "http://localhost:3000",
+      resident,
+      residentAuth: {
+        account_uuid: "acc-1",
+        cpf_digits: "07009718318",
+        profile_type: "RESIDENT",
+        active_context: {
+          context_key: "RESIDENT:tenant-a:101",
+          profile_type: "RESIDENT",
+          person_id: 101,
+          user_uuid: null,
+          user_role: null,
+          tenant_uuid: "tenant-a",
+          tenant_name: "Condominio A",
+          person_name: "Maria",
+          site_id: 11,
+          site_name: "Torre Azul",
+          residence_block: "A",
+          residence_apartment: "101",
+          unit_label: "A - 101",
+          context_label: "Condominio A - Torre Azul - A - 101",
+        },
+        contexts: [],
+      },
+      token: "token-online",
+      refreshToken: null,
+    };
+
+    const calendar: CommonAreaCalendar = {
+      area: {
+        id: 99,
+        name: "Salão Gourmet",
+        opening_time: "08:00",
+        closing_time: "22:00",
+        requires_approval: true,
+        status: "ACTIVE",
+      },
+      from: "2026-03-20",
+      to: "2026-03-20",
+      days: [
+        {
+          date: "2026-03-20",
+          is_closed: false,
+          status_label: "Dia livre",
+          window: {
+            opens_at: "18:00",
+            closes_at: "22:00",
+            duration_minutes: 240,
+          },
+          windows: [
+            {
+              opens_at: "18:00",
+              closes_at: "22:00",
+              duration_minutes: 240,
+            },
+          ],
+          reservations: [],
+          confirmed_count: 0,
+          pending_count: 0,
+        },
+      ],
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
+      json: async () => calendar,
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      getCommonAreaCalendar(snapshot, "online", 99, {
+        from: "2026-03-20",
+      }),
+    ).resolves.toEqual(calendar);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3000/resident-app/common-areas/99/calendar?from=2026-03-20&to=2026-03-20",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-online",
         }),
       }),
     );

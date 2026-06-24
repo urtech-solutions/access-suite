@@ -1,12 +1,18 @@
 import { useMemo, useState } from "react";
 import {
+  AlertCircle,
+  CalendarDays,
   CalendarClock,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Copy,
   Link2,
-  MapPin,
+  Map,
   Plus,
   Share2,
+  UserRound,
   Users,
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -28,12 +34,18 @@ import { PageHeader } from "@/features/shared/PageHeader";
 import { useSession } from "@/features/session/SessionProvider";
 import {
   createReservation,
+  getCommonAreaCalendar,
   listCommonAreas,
   listReservations,
   rotateReservationLink,
   updateReservationHeadcount,
 } from "@/services/mobile-app.service";
-import type { CommonArea, ReservationEntry } from "@/services/mobile-app.types";
+import type {
+  CommonArea,
+  CommonAreaAvailabilityWindow,
+  CommonAreaDayAvailability,
+  ReservationEntry,
+} from "@/services/mobile-app.types";
 
 type ScheduleInterval = {
   start: Date;
@@ -46,6 +58,20 @@ type ScheduleInterval = {
 type TimelineReservationBlock = ScheduleInterval & {
   reservation: ReservationEntry;
   blocking: boolean;
+};
+
+type AreaDaySchedule = {
+  available: boolean;
+  dayStart: Date | null;
+  dayEnd: Date | null;
+  totalMinutes: number;
+  timelineHeight: number;
+  markers: Array<{ label: string; top: number }>;
+  dayReservations: ReservationEntry[];
+  blocks: TimelineReservationBlock[];
+  freeWindows: ScheduleInterval[];
+  confirmedCount: number;
+  pendingCount: number;
 };
 
 function formatReservationDate(value: string) {
@@ -71,6 +97,17 @@ function formatTimelineDayLabel(value: string) {
     day: "2-digit",
     month: "short",
   });
+}
+
+function formatTimelineDayParts(value: string) {
+  const date = new Date(`${value}T12:00:00`);
+  return {
+    weekday: date
+      .toLocaleDateString("pt-BR", { weekday: "short" })
+      .replace(".", "")
+      .toUpperCase(),
+    day: date.toLocaleDateString("pt-BR", { day: "2-digit" }),
+  };
 }
 
 function formatHourLabel(value: Date | string) {
@@ -147,7 +184,7 @@ function overlapsRange(startA: Date, endA: Date, startB: Date, endB: Date) {
 }
 
 function buildDateRail(anchor: string, total = 7) {
-  const offsetStart = -1;
+  const offsetStart = -2;
   return Array.from({ length: total }, (_, index) =>
     addDays(anchor, index + offsetStart),
   );
@@ -178,13 +215,77 @@ function buildHourlyMarkers(
   return markers;
 }
 
+function resolveAreaWindows(
+  area: CommonArea,
+  dayAvailability?: CommonAreaDayAvailability | null,
+) {
+  if (dayAvailability) {
+    if (Array.isArray(dayAvailability.windows) && dayAvailability.windows.length) {
+      return dayAvailability.windows;
+    }
+
+    if (dayAvailability.window) {
+      return [dayAvailability.window];
+    }
+
+    return [];
+  }
+
+  if (!area.opening_time || !area.closing_time) {
+    return [];
+  }
+
+  return [
+    {
+      opens_at: area.opening_time,
+      closes_at: area.closing_time,
+      duration_minutes:
+        extractMinutes(area.closing_time) - extractMinutes(area.opening_time),
+    },
+  ];
+}
+
+function windowContainsRange(
+  window: CommonAreaAvailabilityWindow,
+  start: number,
+  end: number,
+) {
+  return start >= extractMinutes(window.opens_at) && end <= extractMinutes(window.closes_at);
+}
+
 function buildAreaDaySchedule(
   area: CommonArea,
   reservations: ReservationEntry[],
   dayValue: string,
-) {
-  const dayStart = createLocalDate(dayValue, area.opening_time);
-  const dayEnd = createLocalDate(dayValue, area.closing_time);
+  dayAvailability?: CommonAreaDayAvailability | null,
+): AreaDaySchedule {
+  const windows = resolveAreaWindows(area, dayAvailability);
+  const windowRanges = windows
+    .map((window) => ({
+      start: createLocalDate(dayValue, window.opens_at),
+      end: createLocalDate(dayValue, window.closes_at),
+    }))
+    .filter((window) => window.end > window.start)
+    .sort((left, right) => left.start.getTime() - right.start.getTime());
+
+  if (windowRanges.length === 0) {
+    return {
+      available: false,
+      dayStart: null,
+      dayEnd: null,
+      totalMinutes: 0,
+      timelineHeight: 320,
+      markers: [],
+      dayReservations: [],
+      blocks: [],
+      freeWindows: [],
+      confirmedCount: 0,
+      pendingCount: 0,
+    };
+  }
+
+  const dayStart = windowRanges[0].start;
+  const dayEnd = windowRanges[windowRanges.length - 1].end;
   const totalMinutes = Math.max(
     Math.round((dayEnd.getTime() - dayStart.getTime()) / 60000),
     60,
@@ -195,11 +296,13 @@ function buildAreaDaySchedule(
       (reservation) =>
         reservation.area.id === area.id &&
         isVisibleTimelineReservation(reservation.status) &&
-        overlapsRange(
-          new Date(reservation.reserved_from),
-          new Date(reservation.reserved_until),
-          dayStart,
-          dayEnd,
+        windowRanges.some((window) =>
+          overlapsRange(
+            new Date(reservation.reserved_from),
+            new Date(reservation.reserved_until),
+            window.start,
+            window.end,
+          ),
         ),
     )
     .sort(
@@ -234,35 +337,60 @@ function buildAreaDaySchedule(
     },
   );
 
-  const blockingIntervals = blocks
-    .filter((block) => block.blocking)
-    .map((block) => ({ start: block.start, end: block.end }))
-    .sort((left, right) => left.start.getTime() - right.start.getTime());
-
-  const mergedBlocking: Array<{ start: Date; end: Date }> = [];
-  for (const interval of blockingIntervals) {
-    const last = mergedBlocking[mergedBlocking.length - 1];
-    if (!last || interval.start > last.end) {
-      mergedBlocking.push({ ...interval });
-      continue;
-    }
-
-    if (interval.end > last.end) {
-      last.end = interval.end;
-    }
-  }
-
   const freeWindows: ScheduleInterval[] = [];
-  let cursor = dayStart;
+  for (const window of windowRanges) {
+    const blockingIntervals = blocks
+      .filter(
+        (block) =>
+          block.blocking &&
+          overlapsRange(block.start, block.end, window.start, window.end),
+      )
+      .map((block) => ({
+        start: new Date(Math.max(block.start.getTime(), window.start.getTime())),
+        end: new Date(Math.min(block.end.getTime(), window.end.getTime())),
+      }))
+      .sort((left, right) => left.start.getTime() - right.start.getTime());
 
-  for (const interval of mergedBlocking) {
-    if (interval.start > cursor) {
-      const minutes = Math.round(
-        (interval.start.getTime() - cursor.getTime()) / 60000,
-      );
+    const mergedBlocking: Array<{ start: Date; end: Date }> = [];
+    for (const interval of blockingIntervals) {
+      const last = mergedBlocking[mergedBlocking.length - 1];
+      if (!last || interval.start > last.end) {
+        mergedBlocking.push({ ...interval });
+        continue;
+      }
+
+      if (interval.end > last.end) {
+        last.end = interval.end;
+      }
+    }
+
+    let cursor = window.start;
+    for (const interval of mergedBlocking) {
+      if (interval.start > cursor) {
+        const minutes = Math.round(
+          (interval.start.getTime() - cursor.getTime()) / 60000,
+        );
+        freeWindows.push({
+          start: new Date(cursor),
+          end: new Date(interval.start),
+          minutes,
+          top:
+            ((cursor.getTime() - dayStart.getTime()) / 60000 / totalMinutes) *
+            100,
+          height: (minutes / totalMinutes) * 100,
+        });
+      }
+
+      if (interval.end > cursor) {
+        cursor = interval.end;
+      }
+    }
+
+    if (cursor < window.end) {
+      const minutes = Math.round((window.end.getTime() - cursor.getTime()) / 60000);
       freeWindows.push({
         start: new Date(cursor),
-        end: new Date(interval.start),
+        end: new Date(window.end),
         minutes,
         top:
           ((cursor.getTime() - dayStart.getTime()) / 60000 / totalMinutes) *
@@ -270,22 +398,6 @@ function buildAreaDaySchedule(
         height: (minutes / totalMinutes) * 100,
       });
     }
-
-    if (interval.end > cursor) {
-      cursor = interval.end;
-    }
-  }
-
-  if (cursor < dayEnd) {
-    const minutes = Math.round((dayEnd.getTime() - cursor.getTime()) / 60000);
-    freeWindows.push({
-      start: new Date(cursor),
-      end: new Date(dayEnd),
-      minutes,
-      top:
-        ((cursor.getTime() - dayStart.getTime()) / 60000 / totalMinutes) * 100,
-      height: (minutes / totalMinutes) * 100,
-    });
   }
 
   const confirmedCount = dayReservations.filter((reservation) =>
@@ -297,6 +409,7 @@ function buildAreaDaySchedule(
   const timelineHeight = Math.max(Math.round((totalMinutes / 60) * 42), 320);
 
   return {
+    available: true,
     dayStart,
     dayEnd,
     totalMinutes,
@@ -334,6 +447,7 @@ function canFitAreaWindow(
   area: CommonArea | undefined,
   startTime: string,
   durationHours: number,
+  dayAvailability?: CommonAreaDayAvailability | null,
 ) {
   if (!area || !startTime || !durationHours) {
     return true;
@@ -341,9 +455,8 @@ function canFitAreaWindow(
 
   const start = extractMinutes(startTime);
   const end = start + durationHours * 60;
-  return (
-    start >= extractMinutes(area.opening_time) &&
-    end <= extractMinutes(area.closing_time)
+  return resolveAreaWindows(area, dayAvailability).some((window) =>
+    windowContainsRange(window, start, end),
   );
 }
 
@@ -427,6 +540,7 @@ const CommonAreasPage = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [timelineAreaId, setTimelineAreaId] = useState<number | null>(null);
   const [timelineDate, setTimelineDate] = useState(todayValue);
+  const [dayMapExpanded, setDayMapExpanded] = useState(false);
   const [selectedAreaId, setSelectedAreaId] = useState("");
   const [eventName, setEventName] = useState("");
   const [reservationDate, setReservationDate] = useState("");
@@ -472,9 +586,22 @@ const CommonAreasPage = () => {
         throw new Error("Preencha data, horário e área para continuar.");
       }
 
-      if (!canFitAreaWindow(selectedArea, startTime, duration)) {
+      if (selectedAreaCalendarPending) {
+        throw new Error("Consultando a agenda do dia. Aguarde um instante.");
+      }
+
+      if (
+        !canFitAreaWindow(
+          selectedArea,
+          startTime,
+          duration,
+          selectedAreaDayAvailability,
+        )
+      ) {
         throw new Error(
-          "A reserva precisa caber dentro do horário de funcionamento da área.",
+          selectedAreaDayAvailability?.is_closed
+            ? "A área está fechada na data selecionada."
+            : "A reserva precisa caber dentro do horário de funcionamento da área.",
         );
       }
 
@@ -571,17 +698,52 @@ const CommonAreasPage = () => {
   const selectedArea = availableAreas.find(
     (area) => area.id === Number(selectedAreaId),
   );
+  const selectedAreaCalendarQuery = useQuery({
+    queryKey: [
+      "common-area-calendar",
+      selectedArea?.id ?? null,
+      reservationDate,
+      snapshot.mode,
+      connectionState,
+    ],
+    enabled: Boolean(selectedArea && reservationDate),
+    queryFn: () =>
+      getCommonAreaCalendar(snapshot, connectionState, selectedArea!.id, {
+        from: reservationDate,
+      }),
+  });
   const requestedDuration = Number(durationHours || "0");
   const requestedGuests = Number(guestCount || "0");
+  const selectedAreaDayAvailability =
+    selectedAreaCalendarQuery.data?.days?.[0] ?? null;
   const scheduleFits = canFitAreaWindow(
     selectedArea,
     startTime,
     requestedDuration,
+    selectedAreaDayAvailability,
   );
   const capacityExceeded =
     Boolean(selectedArea?.capacity) &&
     requestedGuests > Number(selectedArea.capacity);
   const timelineArea = areas.find((area) => area.id === timelineAreaId) ?? null;
+  const timelineCalendarQuery = useQuery({
+    queryKey: [
+      "common-area-calendar",
+      timelineArea?.id ?? null,
+      timelineDate,
+      snapshot.mode,
+      connectionState,
+    ],
+    enabled: Boolean(timelineArea && timelineDate),
+    queryFn: () =>
+      getCommonAreaCalendar(snapshot, connectionState, timelineArea!.id, {
+        from: timelineDate,
+      }),
+  });
+  const timelineDayAvailability = timelineCalendarQuery.data?.days?.[0] ?? null;
+  const selectedAreaCalendarPending =
+    Boolean(selectedArea && reservationDate) &&
+    (selectedAreaCalendarQuery.isLoading || selectedAreaCalendarQuery.isFetching);
 
   const myReservations = useMemo(
     () =>
@@ -619,9 +781,14 @@ const CommonAreasPage = () => {
   const timelineSchedule = useMemo(
     () =>
       timelineArea
-        ? buildAreaDaySchedule(timelineArea, reservations, timelineDate)
+        ? buildAreaDaySchedule(
+            timelineArea,
+            timelineDayAvailability?.reservations ?? reservations,
+            timelineDate,
+            timelineDayAvailability,
+          )
         : null,
-    [timelineArea, reservations, timelineDate],
+    [timelineArea, reservations, timelineDate, timelineDayAvailability],
   );
 
   const draftConflictSummary = useMemo(() => {
@@ -636,8 +803,9 @@ const CommonAreasPage = () => {
 
     const schedule = buildAreaDaySchedule(
       selectedArea,
-      reservations,
+      selectedAreaDayAvailability?.reservations ?? reservations,
       reservationDate,
+      selectedAreaDayAvailability,
     );
     const draftStart = createLocalDate(reservationDate, startTime);
     const draftEnd = new Date(
@@ -670,6 +838,7 @@ const CommonAreasPage = () => {
     };
   }, [
     selectedArea,
+    selectedAreaDayAvailability,
     reservationDate,
     startTime,
     requestedDuration,
@@ -682,6 +851,7 @@ const CommonAreasPage = () => {
 
   const openAreaTimeline = (area: CommonArea) => {
     setTimelineAreaId(area.id);
+    setDayMapExpanded(false);
     setTimelineDate(
       selectedAreaId === String(area.id) && reservationDate
         ? reservationDate
@@ -829,17 +999,6 @@ const CommonAreasPage = () => {
                 </DialogHeader>
 
                 <div className="space-y-4 pt-2">
-                  <div className="rounded-[20px] border border-border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
-                    <p className="font-semibold text-foreground">
-                      Fluxo do condomínio
-                    </p>
-                    <p className="mt-1">
-                      Se a área exigir aprovação, a sua solicitação fica
-                      pendente e o horário continua disponível na timeline até a
-                      liberação final.
-                    </p>
-                  </div>
-
                   <div className="space-y-2">
                     <Label>Área comum</Label>
                     <select
@@ -921,31 +1080,32 @@ const CommonAreasPage = () => {
                     />
                   </div>
 
-                  {selectedArea ? (
-                    <div className="rounded-[18px] bg-muted px-3 py-2 text-sm text-muted-foreground">
-                      {selectedArea.name} funciona de{" "}
-                      {selectedArea.opening_time} às {selectedArea.closing_time}
-                      {selectedArea.capacity
-                        ? ` e suporta até ${selectedArea.capacity} pessoa(s).`
-                        : "."}
-                      {selectedArea.location
-                        ? ` Entrada vinculada em ${selectedArea.location.name}.`
-                        : " Ainda sem location vinculada no Management."}
-                    </div>
-                  ) : null}
-
-                  {selectedArea && !selectedArea.location ? (
-                    <div className="rounded-[18px] border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-                      Esta área ainda está sem location associada. A reserva
-                      pode ser criada, mas o fluxo operacional de acesso precisa
-                      ser revisado no Management.
+                  {selectedArea && reservationDate ? (
+                    <div className="rounded-[18px] border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                      {selectedAreaCalendarPending ? (
+                        "Consultando a janela efetiva desta data..."
+                      ) : selectedAreaDayAvailability?.is_closed ? (
+                        "A área está fechada na data selecionada."
+                      ) : draftConflictSummary?.suggestedWindows.length ? (
+                        <>
+                          Janela válida do dia:{" "}
+                          {draftConflictSummary.suggestedWindows
+                            .map((window) =>
+                              formatTimeRange(window.start, window.end),
+                            )
+                            .join(" · ")}
+                        </>
+                      ) : (
+                        "Não foi possível resolver uma janela disponível para esta data."
+                      )}
                     </div>
                   ) : null}
 
                   {!scheduleFits ? (
                     <div className="rounded-[18px] border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                      O período precisa caber no horário de funcionamento da
-                      área.
+                      {selectedAreaDayAvailability?.is_closed
+                        ? "A área está fechada na data selecionada."
+                        : "O período precisa caber no horário de funcionamento da área."}
                     </div>
                   ) : null}
 
@@ -1038,6 +1198,7 @@ const CommonAreasPage = () => {
                       !startTime ||
                       Number(durationHours) < 1 ||
                       Number(guestCount) < 1 ||
+                      selectedAreaCalendarPending ||
                       !scheduleFits ||
                       hasBlockingDraftConflict ||
                       capacityExceeded ||
@@ -1092,183 +1253,161 @@ const CommonAreasPage = () => {
         }}
       >
         {timelineArea && timelineSchedule ? (
-          <DialogContent className="max-h-[92vh] max-w-[min(760px,calc(100vw-1rem))] overflow-y-auto rounded-[32px] border-border/80 bg-background p-0">
-            <div className="overflow-hidden rounded-[32px]">
-              <div className="border-b border-border/70 bg-[linear-gradient(145deg,rgba(15,23,42,0.04),rgba(251,191,36,0.12),rgba(255,255,255,0.96))] px-5 pb-5 pt-6">
+          <DialogContent className="max-h-[94vh] w-[min(430px,calc(100vw-0.75rem))] max-w-[min(430px,calc(100vw-0.75rem))] overflow-y-auto rounded-[24px] border-border/80 bg-[#f8fafc] p-0 shadow-2xl">
+            <div className="overflow-hidden rounded-[24px] pb-16">
+              <div className="border-b border-border/70 bg-white px-3.5 pb-3.5 pr-10 pt-4">
                 <DialogHeader>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[11px] uppercase tracking-[0.26em] text-muted-foreground">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                         Radar da area
                       </p>
-                      <DialogTitle className="mt-2 text-xl font-semibold text-foreground">
+                      <DialogTitle className="mt-1 text-xl font-semibold text-foreground">
                         {timelineArea.name}
                       </DialogTitle>
-                      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span className="rounded-full bg-background/80 px-3 py-1">
-                          {timelineArea.opening_time} as{" "}
-                          {timelineArea.closing_time}
-                        </span>
-                        <span className="rounded-full bg-background/80 px-3 py-1">
-                          {timelineArea.requires_approval
-                            ? "Reserva com aprovacao"
-                            : "Liberacao imediata"}
-                        </span>
-                        {timelineArea.location ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-background/80 px-3 py-1">
-                            <MapPin className="h-3.5 w-3.5" />
-                            {timelineArea.location.name}
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-warning/15 px-3 py-1 text-warning">
-                            Sem location vinculada
-                          </span>
-                        )}
-                      </div>
                     </div>
                     <Badge
                       variant={
-                        timelineSchedule.confirmedCount > 0
+                        !timelineSchedule.available
+                          ? "destructive"
+                          : timelineSchedule.confirmedCount > 0
                           ? "warning"
                           : "success"
                       }
+                      className="mt-3 shrink-0 rounded-full px-2.5 py-1 text-[11px]"
                     >
-                      {timelineSchedule.confirmedCount > 0
+                      {!timelineSchedule.available
+                        ? "Área fechada"
+                        : timelineSchedule.confirmedCount > 0
                         ? `${timelineSchedule.confirmedCount} bloqueio(s)`
                         : "Dia livre"}
                     </Badge>
                   </div>
                 </DialogHeader>
 
-                <div className="mt-5 grid grid-cols-3 gap-3">
-                  <div className="rounded-[20px] border border-white/60 bg-white/70 p-3 shadow-sm backdrop-blur">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                      Confirmadas
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold text-foreground">
-                      {timelineSchedule.confirmedCount}
-                    </p>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <div className="flex min-w-0 items-center gap-2 rounded-[12px] border border-border bg-white px-2.5 py-2.5 shadow-sm">
+                    <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />
+                    <div className="min-w-0">
+                      <p className="text-[11px] text-muted-foreground">
+                        Confirmadas
+                      </p>
+                      <p className="text-lg font-semibold leading-none text-foreground">
+                        {timelineSchedule.confirmedCount}
+                      </p>
+                    </div>
                   </div>
-                  <div className="rounded-[20px] border border-white/60 bg-white/70 p-3 shadow-sm backdrop-blur">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                      Pendentes
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold text-foreground">
-                      {timelineSchedule.pendingCount}
-                    </p>
-                  </div>
-                  <div className="rounded-[20px] border border-white/60 bg-white/70 p-3 shadow-sm backdrop-blur">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                      Janelas livres
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold text-foreground">
-                      {timelineSchedule.freeWindows.length}
-                    </p>
+                  <div className="flex min-w-0 items-center gap-2 rounded-[12px] border border-border bg-white px-2.5 py-2.5 shadow-sm">
+                    <Clock3 className="h-5 w-5 shrink-0 text-warning" />
+                    <div className="min-w-0">
+                      <p className="text-[11px] text-muted-foreground">
+                        Pendentes
+                      </p>
+                      <p className="text-lg font-semibold leading-none text-foreground">
+                        {timelineSchedule.pendingCount}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="space-y-5 px-5 py-5">
-                <div className="flex flex-col gap-3">
-                  <div className="overflow-x-auto pb-1">
-                    <div className="flex min-w-max gap-2">
-                      {buildDateRail(timelineDate).map((dayValue) => (
+              <div className="border-b border-border/70 bg-white px-3.5 py-2">
+                <div className="grid grid-cols-[36px,1fr,36px] items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 rounded-full"
+                    onClick={() => setTimelineDate(addDays(timelineDate, -1))}
+                  >
+                    <ChevronLeft className="h-5 w-5" />
+                  </Button>
+                  <div className="grid grid-cols-7 gap-1">
+                    {buildDateRail(timelineDate).map((dayValue) => {
+                      const dayParts = formatTimelineDayParts(dayValue);
+
+                      return (
                         <button
                           key={dayValue}
                           type="button"
                           onClick={() => setTimelineDate(dayValue)}
-                          className={`rounded-full border px-4 py-2 text-sm transition ${
+                          className={`relative flex min-h-[50px] min-w-0 flex-col items-center justify-center rounded-[13px] border text-center transition ${
                             timelineDate === dayValue
                               ? "border-foreground bg-foreground text-background shadow-sm"
-                              : "border-border bg-muted/40 text-muted-foreground"
+                              : "border-transparent bg-transparent text-muted-foreground hover:bg-muted"
                           }`}
                         >
-                          {formatTimelineDayLabel(dayValue)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="min-w-0 flex-1">
-                      <Label>Dia analisado</Label>
-                      <Input
-                        type="date"
-                        value={timelineDate}
-                        onChange={(event) =>
-                          setTimelineDate(event.target.value)
-                        }
-                      />
-                    </div>
-                    {canCreateReservation ? (
-                      <Button
-                        variant="outline"
-                        className="mt-5 rounded-full"
-                        onClick={() => startReservationForArea(timelineArea)}
-                      >
-                        Reservar esta area
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                        Radar de disponibilidade
-                      </p>
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        Blocos verdes mostram faixas livres. Blocos quentes
-                        mostram reservas confirmadas ou em analise.
-                      </p>
-                    </div>
-                    <Badge variant="secondary">
-                      {formatTimelineDayLabel(timelineDate)}
-                    </Badge>
-                  </div>
-
-                  <div className="mt-4 grid gap-2">
-                    {timelineSchedule.freeWindows.length > 0 ? (
-                      timelineSchedule.freeWindows.map((window, index) => (
-                        <div
-                          key={`${window.start.toISOString()}-${index}`}
-                          className="flex items-center justify-between rounded-[18px] border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700"
-                        >
-                          <span>
-                            {formatTimeRange(window.start, window.end)}
+                          <span className="text-[10px] font-semibold leading-none">
+                            {dayParts.weekday}
                           </span>
-                          <span>{formatDurationLabel(window.minutes)}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-[18px] border border-destructive/20 bg-destructive/10 px-3 py-3 text-sm text-destructive">
-                        Nao existe janela livre dentro do horario de
-                        funcionamento neste dia.
-                      </div>
-                    )}
-
-                    {timelineSchedule.pendingCount > 0 ? (
-                      <div className="rounded-[18px] border border-warning/20 bg-warning/10 px-3 py-3 text-sm text-warning">
-                        Existem {timelineSchedule.pendingCount} solicitacao(oes)
-                        pendente(s) neste dia. Elas aparecem no mapa, mas ainda
-                        nao bloqueiam a agenda.
-                      </div>
-                    ) : null}
+                          <span className="mt-1 text-lg font-semibold leading-none">
+                            {dayParts.day}
+                          </span>
+                          {timelineDate === dayValue ? (
+                            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-success" />
+                          ) : null}
+                        </button>
+                      );
+                    })}
                   </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 rounded-full"
+                    onClick={() => setTimelineDate(addDays(timelineDate, 1))}
+                  >
+                    <ChevronRight className="h-5 w-5" />
+                  </Button>
+                </div>
+              </div>
+
+                <div className="space-y-3.5 px-3.5 py-3.5">
+                {!timelineSchedule.available ? (
+                  <div className="rounded-[14px] border border-destructive/20 bg-destructive/10 px-3.5 py-3 text-xs text-destructive">
+                    Esta área não possui janela reservável na data selecionada.
+                  </div>
+                ) : null}
+
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-foreground">
+                    <CalendarDays className="h-4 w-4 shrink-0" />
+                    <span>Dia analisado</span>
+                  </div>
+                  <label className="relative inline-flex shrink-0 items-center gap-1.5 overflow-hidden rounded-full bg-foreground px-3 py-2 text-[11px] font-semibold text-background shadow-sm">
+                    <CalendarDays className="h-3.5 w-3.5" />
+                    {formatTimelineDayLabel(timelineDate)}
+                    <Input
+                      type="date"
+                      value={timelineDate}
+                      onChange={(event) => setTimelineDate(event.target.value)}
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    />
+                  </label>
                 </div>
 
-                <div className="rounded-[28px] border border-border bg-card p-4 shadow-sm">
-                  <div className="mb-4">
+                <div className="rounded-[16px] border border-border bg-white p-3 shadow-sm">
+                  <div className="mb-2.5 flex flex-wrap items-start justify-between gap-2.5">
                     <h3 className="text-base font-semibold text-foreground">
-                      Mapa do dia
+                      Radar de disponibilidade
                     </h3>
-                    <p className="text-sm text-muted-foreground">
-                      Visao inspirada em assistente de agenda: veja rapidamente
-                      onde ha conflito e onde ainda cabe reserva.
-                    </p>
+                    <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3 w-3 rounded-sm bg-success" />
+                        Livre
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3 w-3 rounded-sm bg-destructive" />
+                        Bloqueado
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3 w-3 rounded-sm bg-warning" />
+                        Pendente
+                      </span>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-[54px,1fr] gap-3">
+                  <div className="grid grid-cols-[42px,1fr] gap-2">
                     <div
                       className="relative text-[11px] text-muted-foreground"
                       style={{ height: `${timelineSchedule.timelineHeight}px` }}
@@ -1285,13 +1424,13 @@ const CommonAreasPage = () => {
                     </div>
 
                     <div
-                      className="relative overflow-hidden rounded-[28px] border border-border/70 bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))]"
+                      className="relative overflow-hidden rounded-[2px] border-l border-border/80 bg-[#f8fbfa]"
                       style={{ height: `${timelineSchedule.timelineHeight}px` }}
                     >
                       {timelineSchedule.markers.map((marker) => (
                         <div
                           key={`line-${marker.label}-${marker.top}`}
-                          className="absolute left-0 right-0 border-t border-dashed border-border/70"
+                          className="absolute left-0 right-0 border-t border-dashed border-border/80"
                           style={{ top: `${marker.top}%` }}
                         />
                       ))}
@@ -1299,12 +1438,19 @@ const CommonAreasPage = () => {
                       {timelineSchedule.freeWindows.map((window, index) => (
                         <div
                           key={`free-${window.start.toISOString()}-${index}`}
-                          className="absolute left-3 right-3 rounded-[18px] border border-emerald-500/20 bg-emerald-500/10"
+                          className="absolute left-0 right-0 border-l-4 border-success bg-success/8 px-3 py-1.5 text-[11px]"
                           style={{
                             top: `${window.top}%`,
-                            height: `${window.height}%`,
+                            height: `${clampNumber(window.height, 6, 100)}%`,
                           }}
-                        />
+                        >
+                          <p className="font-medium text-muted-foreground">
+                            {formatTimeRange(window.start, window.end)}
+                          </p>
+                          <p className="mt-1 font-semibold text-success">
+                            Livre
+                          </p>
+                        </div>
                       ))}
 
                       {timelineSchedule.blocks.map((block) => {
@@ -1321,28 +1467,34 @@ const CommonAreasPage = () => {
                         return (
                           <div
                             key={`block-${block.reservation.id}`}
-                            className={`absolute rounded-[20px] border px-3 py-2 text-left shadow-sm ${
+                            className={`absolute left-0 right-0 border-l-4 px-3 py-1.5 text-left ${
                               block.blocking
-                                ? "left-3 right-3 border-amber-500/30 bg-amber-500/18 text-amber-950"
-                                : "left-[46%] right-3 border-warning/30 border-dashed bg-warning/12 text-amber-950"
+                                ? "border-destructive bg-destructive/10 text-destructive"
+                                : "border-warning bg-warning/10 text-warning"
                             }`}
                             style={{
                               top: `${block.top}%`,
                               height: `${block.height}%`,
                             }}
                           >
-                            <div className="flex items-start justify-between gap-2">
-                              <p className="text-xs font-semibold leading-tight">
-                                {block.reservation.event_name}
-                              </p>
-                              <Badge variant={status.variant}>
-                                {status.label}
-                              </Badge>
+                            <div className="flex h-full items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-medium leading-tight text-muted-foreground">
+                                  {formatTimeRange(block.start, block.end)}
+                                </p>
+                                <p className="mt-0.5 text-[11px] font-semibold leading-tight">
+                                  {block.blocking ? "Reservado" : status.label}
+                                </p>
+                              </div>
+                              <span className="inline-flex shrink-0 items-center gap-2 text-xs text-foreground">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <UserRound className="h-4 w-4" />
+                                  {block.reservation.guest_count}
+                                </span>
+                                <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                              </span>
                             </div>
-                            <p className="mt-1 text-[11px] leading-tight opacity-80">
-                              {formatTimeRange(block.start, block.end)}
-                            </p>
-                            <p className="mt-1 text-[11px] leading-tight opacity-80">
+                            <p className="sr-only">
                               {block.reservation.guest_count} pessoa(s)
                               {unitLabel ? ` · ${unitLabel}` : ""}
                             </p>
@@ -1353,16 +1505,63 @@ const CommonAreasPage = () => {
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground">
-                      Reservas deste dia
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      Lista detalhada para conferir quem ocupa ou negocia cada
-                      faixa.
+                {timelineSchedule.freeWindows.length === 0 ? (
+                  <div className="flex items-center gap-2.5 rounded-[14px] border border-destructive/20 bg-destructive/10 px-3.5 py-3 text-destructive">
+                    <AlertCircle className="h-5 w-5 shrink-0" />
+                    <p className="text-xs font-medium leading-snug">
+                      Nao existe janela livre dentro do horario de funcionamento
+                      neste dia.
                     </p>
                   </div>
+                ) : null}
+
+                {timelineSchedule.pendingCount > 0 ? (
+                  <div className="rounded-[14px] border border-warning/20 bg-warning/10 px-3.5 py-3 text-[11px] font-medium text-warning">
+                    Existem {timelineSchedule.pendingCount} solicitacao(oes)
+                    pendente(s) neste dia. Elas aparecem no radar, mas ainda nao
+                    bloqueiam a agenda.
+                  </div>
+                ) : null}
+
+                <button
+                  type="button"
+                  aria-expanded={dayMapExpanded}
+                  onClick={() => setDayMapExpanded((current) => !current)}
+                  className="flex w-full items-center justify-between rounded-[14px] border border-border bg-white px-3.5 py-3.5 text-left shadow-sm transition hover:bg-muted/30"
+                >
+                  <span className="text-base font-semibold text-foreground">
+                    Mapa do dia
+                  </span>
+                  <span className="inline-flex items-center gap-2.5 text-foreground">
+                    <Map className="h-[18px] w-[18px]" />
+                    <ChevronRight className="h-[18px] w-[18px]" />
+                  </span>
+                </button>
+
+                {dayMapExpanded ? (
+                  <div className="grid gap-1.5 rounded-[14px] border border-border bg-white p-2.5 text-[11px] text-muted-foreground shadow-sm">
+                    {timelineSchedule.freeWindows.length > 0 ? (
+                      timelineSchedule.freeWindows.map((window, index) => (
+                        <div
+                          key={`map-free-${window.start.toISOString()}-${index}`}
+                          className="flex items-center justify-between gap-3 rounded-[12px] bg-success/8 px-3 py-2 text-success"
+                        >
+                          <span>{formatTimeRange(window.start, window.end)}</span>
+                          <span>{formatDurationLabel(window.minutes)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[12px] bg-destructive/10 px-3 py-2 text-destructive">
+                        Sem janelas livres para este dia.
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                <div className="space-y-3">
+                  <h3 className="text-base font-semibold text-foreground">
+                    Reservas deste dia
+                  </h3>
 
                   {timelineSchedule.dayReservations.length > 0 ? (
                     timelineSchedule.dayReservations.map((reservation) => {
@@ -1377,50 +1576,58 @@ const CommonAreasPage = () => {
                       return (
                         <div
                           key={`schedule-row-${reservation.id}`}
-                          className="rounded-[22px] border border-border bg-card p-4 shadow-sm"
+                          className="grid grid-cols-[70px,48px,1fr,22px] items-center overflow-hidden rounded-[14px] border border-border bg-white shadow-sm"
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-foreground">
-                                {reservation.event_name}
-                              </p>
-                              <p className="mt-1 text-sm text-muted-foreground">
-                                {formatTimeRange(
-                                  reservation.reserved_from,
-                                  reservation.reserved_until,
-                                )}
-                              </p>
-                            </div>
-                            <Badge variant={status.variant}>
-                              {status.label}
-                            </Badge>
+                          <div
+                            className={`h-full border-l-4 px-2.5 py-2.5 ${
+                              isBlockingReservation(reservation.status)
+                                ? "border-destructive bg-destructive/5"
+                                : "border-warning bg-warning/5"
+                            }`}
+                          >
+                            <p className="text-[11px] font-medium text-muted-foreground">
+                              {formatHourLabel(reservation.reserved_from)}
+                            </p>
+                            <p className="mt-1 text-[11px] font-medium text-muted-foreground">
+                              {formatHourLabel(reservation.reserved_until)}
+                            </p>
                           </div>
-                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                            <span className="rounded-full bg-muted px-3 py-1">
-                              {reservation.guest_count} pessoa(s)
-                            </span>
-                            {unitLabel ? (
-                              <span className="rounded-full bg-muted px-3 py-1">
-                                {unitLabel}
-                              </span>
-                            ) : null}
-                            {reservation.person.id === resident.id ? (
-                              <span className="rounded-full bg-accent/15 px-3 py-1 text-accent-foreground">
-                                Minha reserva
-                              </span>
-                            ) : null}
+                          <div className="flex items-center justify-center gap-1.5 px-1.5 text-xs font-medium text-foreground">
+                            <UserRound className="h-3.5 w-3.5" />
+                            {reservation.guest_count}
                           </div>
+                          <div className="min-w-0 px-2 py-2.5">
+                            <p className={`text-xs ${status.tone}`}>{status.label}</p>
+                            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                              {status.helper}
+                            </p>
+                            <span className="sr-only">{unitLabel}</span>
+                          </div>
+                          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                         </div>
                       );
                     })
                   ) : (
-                    <div className="rounded-[24px] border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-2.5 rounded-[14px] border border-dashed border-border bg-white px-3.5 py-3.5 text-[11px] text-muted-foreground">
+                      <CalendarClock className="h-3.5 w-3.5" />
                       Nenhuma reserva visivel neste dia para esta area.
                     </div>
                   )}
                 </div>
               </div>
             </div>
+            {canCreateReservation ? (
+              <div className="sticky bottom-0 border-t border-border/70 bg-white/95 px-3.5 py-3 backdrop-blur">
+                <Button
+                  variant="accent"
+                  className="h-11 w-full rounded-[12px] text-sm font-semibold"
+                  onClick={() => startReservationForArea(timelineArea)}
+                >
+                  <CalendarDays className="h-[18px] w-[18px]" />
+                  Reservar esta area
+                </Button>
+              </div>
+            ) : null}
           </DialogContent>
         ) : null}
       </Dialog>

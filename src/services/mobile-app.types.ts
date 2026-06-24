@@ -467,6 +467,32 @@ export interface CommonArea {
     siteId: number;
   } | null;
   status: "ACTIVE" | "MAINTENANCE" | "CLOSED";
+  can_reserve?: boolean;
+  today?: CommonAreaDayAvailability | null;
+}
+
+export interface CommonAreaAvailabilityWindow {
+  opens_at: string;
+  closes_at: string;
+  duration_minutes: number;
+}
+
+export interface CommonAreaDayAvailability {
+  date: string;
+  is_closed: boolean;
+  status_label: string;
+  window: CommonAreaAvailabilityWindow | null;
+  windows?: CommonAreaAvailabilityWindow[];
+  reservations: ReservationEntry[];
+  confirmed_count: number;
+  pending_count: number;
+}
+
+export interface CommonAreaCalendar {
+  area: CommonArea;
+  from: string;
+  to: string;
+  days: CommonAreaDayAvailability[];
 }
 
 export interface ReservationEntry {

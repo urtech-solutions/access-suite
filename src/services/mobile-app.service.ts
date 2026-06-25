@@ -1389,6 +1389,19 @@ export async function getVisitorSettings(
     require_resident_approval: false,
     default_profile: null,
     default_profile_id: null,
+    rules: [],
+    allowed_guest_rules: [
+      {
+        id: 0,
+        site_id: snapshot.resident?.site_id ?? 0,
+        host_person_type_id: 0,
+        guest_person_type_id: 0,
+        access_profile_id: 0,
+        enabled: true,
+        guest_person_type: { id: 0, name: "Visitante" },
+        access_profile: { id: 0, name: "Visitante" },
+      },
+    ],
   };
 
   if (

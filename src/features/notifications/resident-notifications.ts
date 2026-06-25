@@ -185,8 +185,8 @@ function buildPendingApprovalNotification(
     site_name: visitor.site?.name ?? null,
     unit_label: visitor.host?.unit_label ?? null,
     requires_action: true,
-    action_label: "Revisar cadastro",
-    target_path: "/notifications",
+    action_label: "Ver convite",
+    target_path: "/visitors",
     event: null,
   };
 }

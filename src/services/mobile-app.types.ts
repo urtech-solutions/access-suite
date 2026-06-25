@@ -251,6 +251,10 @@ export interface VisitorEntry {
   valid_until: string;
   status: VisitorStatus;
   notes?: string | null;
+  guest_person_type?: {
+    id: number;
+    name: string;
+  } | null;
   host?: {
     id: number;
     name: string;
@@ -284,9 +288,35 @@ export interface VisitorEntry {
       email?: string | null;
       phone_number?: string | null;
       photo_url?: string | null;
+      person_type?: {
+        id: number;
+        name: string;
+      } | null;
     } | null;
   } | null;
   pending_approval_count?: number;
+}
+
+export interface VisitorInviteRule {
+  id: number;
+  site_id: number;
+  host_person_type_id: number;
+  guest_person_type_id: number;
+  access_profile_id: number;
+  enabled: boolean;
+  host_person_type?: {
+    id: number;
+    name: string;
+  } | null;
+  guest_person_type?: {
+    id: number;
+    name: string;
+  } | null;
+  access_profile?: {
+    id: number;
+    name: string;
+    color?: string | null;
+  } | null;
 }
 
 export interface VisitorModuleSettings {
@@ -302,6 +332,8 @@ export interface VisitorModuleSettings {
     name: string;
     color?: string | null;
   } | null;
+  rules?: VisitorInviteRule[];
+  allowed_guest_rules?: VisitorInviteRule[];
 }
 
 export interface IncidentTopic {
@@ -679,6 +711,7 @@ export interface PreviewState {
 
 export interface CreateVisitorInput {
   guest_name: string;
+  guest_person_type_id?: number;
   guest_doc?: string;
   guest_phone?: string;
   visit_date: string;

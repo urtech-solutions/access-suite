@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  Check,
   Clock3,
   Copy,
   Link2,
@@ -27,17 +26,22 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/features/shared/PageHeader";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useSession } from "@/features/session/SessionProvider";
 import {
-  approveVisitor,
   cancelVisitor,
   createVisitor,
   getVisitorSettings,
   listVisitors,
-  rejectVisitor,
   rotateVisitorLink,
 } from "@/services/mobile-app.service";
-import type { VisitorAccessEvent, VisitorEntry } from "@/services/mobile-app.types";
+import type { VisitorEntry } from "@/services/mobile-app.types";
 
 type VisitorListFilter =
   | "ALL"
@@ -48,8 +52,8 @@ type VisitorListFilter =
 
 const statusConfig = {
   PENDING: { label: "Aguardando cadastro", variant: "warning" as const, icon: Clock3 },
-  PENDING_APPROVAL: { label: "Aguardando aprovação", variant: "warning" as const, icon: ShieldAlert },
-  ACTIVE: { label: "Ativo", variant: "info" as const, icon: UserCheck },
+  PENDING_APPROVAL: { label: "Aguardando portaria", variant: "warning" as const, icon: ShieldAlert },
+  ACTIVE: { label: "Aprovado", variant: "success" as const, icon: UserCheck },
   USED: { label: "Utilizado", variant: "success" as const, icon: UserCheck },
   EXPIRED: { label: "Expirado", variant: "secondary" as const, icon: XCircle },
   CANCELLED: { label: "Cancelado", variant: "destructive" as const, icon: XCircle },
@@ -65,44 +69,6 @@ function formatVisitDate(value: string) {
   });
 }
 
-function formatOperationalDate(value: string) {
-  return new Date(value).toLocaleString("pt-BR", {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
-
-function formatAccessReason(reason?: string | null) {
-  switch (String(reason ?? "").trim().toUpperCase()) {
-    case "GRANTED":
-      return "Liberado";
-    case "NO_PERMISSION":
-      return "Sem permissão";
-    case "SCHEDULE":
-      return "Fora do horário";
-    case "EXPIRED_VISITOR":
-      return "Visitante expirado";
-    default:
-      return "Sem detalhe operacional";
-  }
-}
-
-function buildAccessContext(event?: VisitorAccessEvent | null) {
-  return [event?.location?.name, event?.controller?.name]
-    .map((value) => String(value ?? "").trim())
-    .filter(Boolean)
-    .join(" • ");
-}
-
-function resolveAssetUrl(baseUrl: string, path?: string | null) {
-  if (!path) return null;
-  try {
-    return new URL(path, baseUrl).toString();
-  } catch {
-    return path;
-  }
-}
-
 function buildInviteWindow(startDate: string, endDate: string) {
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T23:59:59.999`);
@@ -116,7 +82,10 @@ function buildInviteWindow(startDate: string, endDate: string) {
 function rangeInDays(startDate: string, endDate: string) {
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T23:59:59.999`);
-  return Math.max(1, Math.ceil((end.getTime() - start.getTime() + 1) / 86_400_000));
+  return Math.max(
+    1,
+    Math.ceil((end.getTime() - start.getTime() + 1) / 86_400_000),
+  );
 }
 
 const VisitorsPage = () => {
@@ -125,9 +94,11 @@ const VisitorsPage = () => {
   const canCreateVisitors = resident.role !== "SINDICO";
   const [dialogOpen, setDialogOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
+  const [selectedGuestTypeId, setSelectedGuestTypeId] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [visitorFilter, setVisitorFilter] = useState<VisitorListFilter>("ONGOING");
+  const [visitorFilter, setVisitorFilter] =
+    useState<VisitorListFilter>("ONGOING");
 
   const settingsQuery = useQuery({
     queryKey: ["visitor-settings", resident.id, snapshot.mode, connectionState],
@@ -149,17 +120,31 @@ const VisitorsPage = () => {
     );
   };
 
+  const settings = settingsQuery.data;
+  const allowedGuestRules = settings?.allowed_guest_rules ?? [];
+  const canUseSingleRule = allowedGuestRules.length === 1;
+  const selectedRule =
+    allowedGuestRules.find(
+      (rule) => String(rule.guest_person_type_id) === selectedGuestTypeId,
+    ) ?? (canUseSingleRule ? allowedGuestRules[0] : null);
+  const canCreateByRule =
+    settings?.enabled !== false && allowedGuestRules.length > 0;
+
   const createVisitorMutation = useMutation({
     mutationFn: async () => {
       const effectiveEndDate = endDate || startDate;
       return createVisitor(snapshot, connectionState, resident, {
         guest_name: guestName.trim(),
+        ...(selectedRule?.guest_person_type_id
+          ? { guest_person_type_id: selectedRule.guest_person_type_id }
+          : {}),
         ...buildInviteWindow(startDate, effectiveEndDate),
       });
     },
     onSuccess: () => {
       toast.success("Convite criado com sucesso.");
       setGuestName("");
+      setSelectedGuestTypeId("");
       setStartDate("");
       setEndDate("");
       setDialogOpen(false);
@@ -169,7 +154,7 @@ const VisitorsPage = () => {
       toast.error(
         error instanceof Error && error.message.trim().length > 0
           ? error.message
-          : "Não foi possível criar o convite.",
+          : "Nao foi possivel criar o convite.",
       );
     },
   });
@@ -180,32 +165,6 @@ const VisitorsPage = () => {
     onSuccess: (updated) => {
       saveVisitorLocally(updated);
       queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
-    },
-  });
-
-  const approveVisitorMutation = useMutation({
-    mutationFn: async (visitorId: number) =>
-      approveVisitor(snapshot, connectionState, resident, visitorId),
-    onSuccess: (updated) => {
-      saveVisitorLocally(updated);
-      toast.success("Convidado aprovado e liberado.");
-      queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
-    },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Não foi possível aprovar.");
-    },
-  });
-
-  const rejectVisitorMutation = useMutation({
-    mutationFn: async (visitorId: number) =>
-      rejectVisitor(snapshot, connectionState, resident, visitorId),
-    onSuccess: (updated) => {
-      saveVisitorLocally(updated);
-      toast.success("Cadastro rejeitado.");
-      queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
-    },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Não foi possível rejeitar.");
     },
   });
 
@@ -220,42 +179,16 @@ const VisitorsPage = () => {
       queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Não foi possível cancelar.");
+      toast.error(
+        error instanceof Error ? error.message : "Nao foi possivel cancelar.",
+      );
     },
   });
 
   async function copyTextSafely(text: string) {
-    if (
-      typeof navigator !== "undefined" &&
-      navigator.clipboard?.writeText &&
-      window.isSecureContext
-    ) {
-      try {
-        await navigator.clipboard.writeText(text);
-        return true;
-      } catch {
-        // Falls back to manual copy below.
-      }
-    }
-
-    try {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "true");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      textarea.style.pointerEvents = "none";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      textarea.setSelectionRange(0, textarea.value.length);
-      const copied = document.execCommand("copy");
-      document.body.removeChild(textarea);
-      if (copied) {
-        return true;
-      }
-    } catch {
-      // Falls back to prompt below.
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
     }
 
     window.prompt("Copie manualmente o link do convite:", text);
@@ -264,99 +197,69 @@ const VisitorsPage = () => {
 
   function buildShareText(visitor: VisitorEntry) {
     if (visitor.public_link) {
-      return `Seu link de convite AccessOS: ${visitor.public_link}`;
+      return `Seu link de cadastro de visitante: ${visitor.public_link}`;
     }
 
-    return `Convite ${visitor.guest_name}`;
+    return `Convite de visitante para ${visitor.guest_name}`;
   }
 
   async function ensureVisitorLink(visitor: VisitorEntry) {
     if (visitor.public_link) {
-      return {
-        invitation: visitor,
-        generatedNow: false,
-      };
+      return visitor;
     }
 
-    const rotated = await rotateLinkMutation.mutateAsync(visitor.id);
-    return {
-      invitation: rotated,
-      generatedNow: true,
-    };
+    return rotateLinkMutation.mutateAsync(visitor.id);
   }
 
   async function handleCopy(visitor: VisitorEntry) {
     try {
-      const { invitation } = await ensureVisitorLink(visitor);
+      const invitation = await ensureVisitorLink(visitor);
       const copied = await copyTextSafely(buildShareText(invitation));
       toast.success(
-        copied
-          ? "Link do convite copiado."
-          : "Link pronto para cópia manual.",
+        copied ? "Link do convite copiado." : "Link pronto para copia manual.",
       );
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Não foi possível copiar o link do convite.",
+        error instanceof Error
+          ? error.message
+          : "Nao foi possivel copiar o link do convite.",
       );
     }
   }
 
   async function handleShare(visitor: VisitorEntry) {
     try {
-      const { invitation, generatedNow } = await ensureVisitorLink(visitor);
+      const invitation = await ensureVisitorLink(visitor);
       const shareText = buildShareText(invitation);
 
-      if (generatedNow) {
-        const copied = await copyTextSafely(shareText);
-        toast.success(
-          copied
-            ? "Link gerado e copiado. Toque novamente em compartilhar para abrir o menu do celular."
-            : "Link gerado. Compartilhe manualmente se o menu nativo não abrir.",
-        );
+      if (navigator.share) {
+        await navigator.share({
+          text: shareText,
+          url: invitation.public_link ?? undefined,
+        });
         return;
       }
 
-      if (navigator.share) {
-        try {
-          await navigator.share({
-            text: shareText,
-            url: invitation.public_link ?? undefined,
-          });
-          return;
-        } catch {
-          // Falls back to clipboard below.
-        }
-      }
-
-      const copied = await copyTextSafely(shareText);
-      toast.success(
-        copied
-          ? "Link do convite copiado."
-          : "Link pronto para compartilhamento manual.",
-      );
+      await copyTextSafely(shareText);
+      toast.success("Link do convite copiado.");
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Não foi possível gerar o link do convite.",
+        error instanceof Error
+          ? error.message
+          : "Nao foi possivel compartilhar o convite.",
       );
     }
   }
 
   const visitors = visitorsQuery.data ?? [];
-  const settings = settingsQuery.data;
   const activeVisitors = visitors.filter((visitor) =>
-    visitor.status === "PENDING" ||
-    visitor.status === "PENDING_APPROVAL" ||
-    visitor.status === "ACTIVE",
+    ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(visitor.status),
   );
   const historyVisitors = visitors.filter((visitor) =>
-    visitor.status === "EXPIRED" ||
-    visitor.status === "REJECTED" ||
-    visitor.status === "CANCELLED" ||
-    visitor.status === "USED",
+    ["EXPIRED", "REJECTED", "CANCELLED", "USED"].includes(visitor.status),
   );
-  const cancelledVisitors = visitors.filter((visitor) => visitor.status === "CANCELLED");
   const pendingApprovals = visitors.filter(
-    (visitor) => visitor.current_registration?.status === "PENDING_APPROVAL",
+    (visitor) => visitor.status === "PENDING_APPROVAL",
   );
   const displayedVisitors = visitors.filter((visitor) => {
     if (visitorFilter === "ALL") return true;
@@ -373,9 +276,8 @@ const VisitorsPage = () => {
   });
 
   const effectiveEndDate = endDate || startDate;
-  const selectedDuration = startDate && effectiveEndDate
-    ? rangeInDays(startDate, effectiveEndDate)
-    : 0;
+  const selectedDuration =
+    startDate && effectiveEndDate ? rangeInDays(startDate, effectiveEndDate) : 0;
   const exceedsDuration =
     Boolean(startDate) &&
     Boolean(effectiveEndDate) &&
@@ -384,16 +286,24 @@ const VisitorsPage = () => {
 
   const pageSubtitle = useMemo(() => {
     if (!canCreateVisitors) {
-      return `Visão de acompanhamento dos convites do site ativo para ${resident.name}`;
+      return `Acompanhamento dos convites do site ativo para ${resident.name}`;
     }
 
-    return `Links individuais vinculados ao morador ${resident.name}`;
+    return `Convites para cadastro e acesso fisico vinculados a ${resident.name}`;
   }, [canCreateVisitors, resident.name]);
+
+  const createDisabled =
+    !guestName.trim() ||
+    !startDate ||
+    !effectiveEndDate ||
+    exceedsDuration ||
+    !selectedRule ||
+    createVisitorMutation.isPending;
 
   return (
     <div className="space-y-6 px-4 pb-6 pt-8">
       <PageHeader
-        title="Convites"
+        title="Visitantes"
         subtitle={pageSubtitle}
         backTo="/"
         action={
@@ -404,7 +314,11 @@ const VisitorsPage = () => {
                   variant="accent"
                   size="sm"
                   className="rounded-full"
-                  disabled={settingsQuery.isLoading || !settings?.allow_resident_creation || !settings?.enabled}
+                  disabled={
+                    settingsQuery.isLoading ||
+                    !settings?.allow_resident_creation ||
+                    !canCreateByRule
+                  }
                 >
                   <Plus className="h-4 w-4" />
                   Novo convite
@@ -412,7 +326,7 @@ const VisitorsPage = () => {
               </DialogTrigger>
               <DialogContent className="max-w-sm rounded-[28px]">
                 <DialogHeader>
-                  <DialogTitle>Novo convite individual</DialogTitle>
+                  <DialogTitle>Novo convite de visitante</DialogTitle>
                 </DialogHeader>
 
                 <div className="space-y-4 pt-2">
@@ -421,21 +335,54 @@ const VisitorsPage = () => {
                       Regra do site
                     </p>
                     <p className="mt-1">
-                      Duração máxima: {settings?.max_duration_days ?? 1} dia(s).
+                      Duracao maxima: {settings?.max_duration_days ?? 1} dia(s).
                     </p>
                     <p className="mt-1">
-                      {settings?.require_resident_approval
-                        ? "O convidado se cadastra no link e aguarda sua aprovação final."
-                        : "O cadastro no link já libera o acesso dentro do período definido."}
+                      O convidado se cadastra pelo link e a portaria aprova no
+                      PWA antes de liberar acesso.
                     </p>
                   </div>
 
+                  {allowedGuestRules.length > 1 ? (
+                    <div className="space-y-2">
+                      <Label>Tipo de visitante</Label>
+                      <Select
+                        value={selectedGuestTypeId}
+                        onValueChange={setSelectedGuestTypeId}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione o tipo permitido" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {allowedGuestRules.map((rule) => (
+                            <SelectItem
+                              key={`${rule.id}-${rule.guest_person_type_id}`}
+                              value={String(rule.guest_person_type_id)}
+                            >
+                              {rule.guest_person_type?.name ?? "Visitante"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
+
+                  {allowedGuestRules.length === 1 ? (
+                    <div className="rounded-[18px] bg-muted px-3 py-2 text-sm text-muted-foreground">
+                      Tipo aplicado:{" "}
+                      <strong>
+                        {allowedGuestRules[0].guest_person_type?.name ??
+                          "Visitante"}
+                      </strong>
+                    </div>
+                  ) : null}
+
                   <div className="space-y-2">
-                    <Label>Nome de referência do convidado</Label>
+                    <Label>Nome de referencia do convidado</Label>
                     <Input
                       value={guestName}
                       onChange={(event) => setGuestName(event.target.value)}
-                      placeholder="Ex.: João Silva"
+                      placeholder="Ex.: Joao Silva"
                     />
                   </div>
 
@@ -454,7 +401,7 @@ const VisitorsPage = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Último dia da visita</Label>
+                    <Label>Ultimo dia da visita</Label>
                     <Input
                       type="date"
                       value={endDate}
@@ -465,26 +412,20 @@ const VisitorsPage = () => {
 
                   {startDate ? (
                     <div className="rounded-[18px] bg-muted px-3 py-2 text-sm text-muted-foreground">
-                      Período selecionado: {selectedDuration || 1} dia(s)
+                      Periodo selecionado: {selectedDuration || 1} dia(s)
                     </div>
                   ) : null}
 
                   {exceedsDuration ? (
                     <div className="rounded-[18px] border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                      O período excede o máximo configurado para o site.
+                      O periodo excede o maximo configurado para o site.
                     </div>
                   ) : null}
 
                   <Button
                     variant="accent"
                     className="w-full"
-                    disabled={
-                      !guestName.trim() ||
-                      !startDate ||
-                      !effectiveEndDate ||
-                      exceedsDuration ||
-                      createVisitorMutation.isPending
-                    }
+                    disabled={createDisabled}
                     onClick={() => createVisitorMutation.mutate()}
                   >
                     Criar convite
@@ -505,119 +446,57 @@ const VisitorsPage = () => {
               {activeVisitors.length} convite(s) em andamento
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {settings?.require_resident_approval
-                ? `${pendingApprovals.length} aguardando sua aprovação final.`
-                : "Os convidados se cadastram no link público e o acesso é liberado no período do convite."}
+              {pendingApprovals.length} aguardando aprovacao da portaria no PWA.
             </p>
           </div>
-          <Badge variant="info">Modulo ativo</Badge>
+          <Badge variant={settings?.enabled === false ? "secondary" : "info"}>
+            {settings?.enabled === false ? "Modulo inativo" : "Modulo ativo"}
+          </Badge>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+
+        {!canCreateByRule ? (
+          <div className="mt-4 rounded-[18px] border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+            Seu tipo de pessoa ainda nao possui regra ativa para convidar
+            visitantes neste site.
+          </div>
+        ) : null}
+
+        <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
           <div className="rounded-[18px] bg-muted px-3 py-2">
             Em andamento: <strong>{activeVisitors.length}</strong>
           </div>
           <div className="rounded-[18px] bg-muted px-3 py-2">
-            Aguardando aprovação: <strong>{pendingApprovals.length}</strong>
+            Portaria: <strong>{pendingApprovals.length}</strong>
           </div>
           <div className="rounded-[18px] bg-muted px-3 py-2">
-            Histórico: <strong>{historyVisitors.length}</strong>
-          </div>
-          <div className="rounded-[18px] bg-muted px-3 py-2">
-            Cancelados: <strong>{cancelledVisitors.length}</strong>
+            Historico: <strong>{historyVisitors.length}</strong>
           </div>
         </div>
+
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button
-            variant={visitorFilter === "ONGOING" ? "accent" : "outline"}
-            className="rounded-full"
-            size="sm"
-            onClick={() => setVisitorFilter("ONGOING")}
-          >
-            Em andamento
-          </Button>
-          <Button
-            variant={visitorFilter === "PENDING_APPROVAL" ? "accent" : "outline"}
-            className="rounded-full"
-            size="sm"
-            onClick={() => setVisitorFilter("PENDING_APPROVAL")}
-          >
-            Pendentes
-          </Button>
-          <Button
-            variant={visitorFilter === "HISTORY" ? "accent" : "outline"}
-            className="rounded-full"
-            size="sm"
-            onClick={() => setVisitorFilter("HISTORY")}
-          >
-            Histórico
-          </Button>
-          <Button
-            variant={visitorFilter === "CANCELLED" ? "accent" : "outline"}
-            className="rounded-full"
-            size="sm"
-            onClick={() => setVisitorFilter("CANCELLED")}
-          >
-            Cancelados
-          </Button>
-          <Button
-            variant={visitorFilter === "ALL" ? "accent" : "outline"}
-            className="rounded-full"
-            size="sm"
-            onClick={() => setVisitorFilter("ALL")}
-          >
-            Todos
-          </Button>
+          {[
+            ["ONGOING", "Em andamento"],
+            ["PENDING_APPROVAL", "Portaria"],
+            ["HISTORY", "Historico"],
+            ["CANCELLED", "Cancelados"],
+            ["ALL", "Todos"],
+          ].map(([value, label]) => (
+            <Button
+              key={value}
+              variant={visitorFilter === value ? "accent" : "outline"}
+              className="rounded-full"
+              size="sm"
+              onClick={() => setVisitorFilter(value as VisitorListFilter)}
+            >
+              {label}
+            </Button>
+          ))}
         </div>
       </div>
-
-      {settings ? (
-        <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-foreground">Configuração do site</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {settings.allow_resident_creation
-                  ? "Criação de convites liberada para o app."
-                  : "Criação de convites bloqueada no app para este site."}
-              </p>
-            </div>
-            <Badge variant={settings.require_resident_approval ? "warning" : "success"}>
-              {settings.require_resident_approval ? "Com aprovação" : "Liberação imediata"}
-            </Badge>
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded-[18px] bg-muted px-3 py-2">
-              Máximo de dias: <strong>{settings.max_duration_days}</strong>
-            </div>
-            <div className="rounded-[18px] bg-muted px-3 py-2">
-              Perfil padrão: <strong>{settings.default_profile?.name ?? "Não definido"}</strong>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <div className="space-y-3">
         {displayedVisitors.map((visitor, index) => {
           const config = statusConfig[visitor.status];
-          const photoUrl = resolveAssetUrl(
-            snapshot.apiBaseUrl,
-            visitor.current_registration?.person?.photo_url,
-          );
-          const grantedAccessEvent =
-            visitor.granted_access_event ??
-            (visitor.latest_access_event?.granted
-              ? visitor.latest_access_event
-              : null);
-          const latestAccessEvent = visitor.latest_access_event ?? null;
-          const showLatestAttempt = Boolean(
-            latestAccessEvent &&
-              (!grantedAccessEvent || latestAccessEvent.id !== grantedAccessEvent.id),
-          );
-          const grantedAccessContext = buildAccessContext(grantedAccessEvent);
-          const latestAccessContext = buildAccessContext(latestAccessEvent);
-          const canApprove =
-            canCreateVisitors &&
-            visitor.current_registration?.status === "PENDING_APPROVAL";
           const canCancel =
             canCreateVisitors &&
             ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(visitor.status);
@@ -632,19 +511,19 @@ const VisitorsPage = () => {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="truncate text-base font-semibold text-foreground">
-                      {visitor.guest_name}
-                    </p>
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {formatVisitDate(visitor.visit_date)} · válido até {formatVisitDate(visitor.valid_until)}
+                  <p className="truncate text-base font-semibold text-foreground">
+                    {visitor.guest_name}
                   </p>
-                  {visitor.host?.unit_label ? (
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      Unidade: {visitor.host.unit_label}
-                    </p>
-                  ) : null}
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {formatVisitDate(visitor.visit_date)} - valido ate{" "}
+                    {formatVisitDate(visitor.valid_until)}
+                  </p>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Tipo:{" "}
+                    {visitor.guest_person_type?.name ??
+                      visitor.current_registration?.person?.person_type?.name ??
+                      "Visitante"}
+                  </p>
                 </div>
                 <Badge variant={config.variant} className="gap-1.5">
                   <config.icon className="h-3 w-3" />
@@ -653,96 +532,16 @@ const VisitorsPage = () => {
               </div>
 
               {visitor.current_registration?.person ? (
-                <div className="mt-4 rounded-[20px] border border-border bg-muted/50 p-3">
-                  <div className="flex items-start gap-3">
-                    {photoUrl ? (
-                      <img
-                        src={photoUrl}
-                        alt={visitor.current_registration.person.name}
-                        className="h-16 w-16 rounded-2xl object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-card text-xs text-muted-foreground">
-                        Sem foto
-                      </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-foreground">
-                        {visitor.current_registration.person.name}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {visitor.current_registration.person.cpf}
-                      </p>
-                      {visitor.current_registration.person.phone_number ? (
-                        <p className="text-sm text-muted-foreground">
-                          {visitor.current_registration.person.phone_number}
-                        </p>
-                      ) : null}
-                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                        Status do cadastro: {visitor.current_registration.status}
-                      </p>
-                    </div>
-                  </div>
-
-                  {canApprove ? (
-                    <div className="mt-4 flex gap-2">
-                      <Button
-                        variant="accent"
-                        className="flex-1"
-                        disabled={approveVisitorMutation.isPending}
-                        onClick={() => approveVisitorMutation.mutate(visitor.id)}
-                      >
-                        <Check className="h-4 w-4" />
-                        Aprovar
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="flex-1"
-                        disabled={rejectVisitorMutation.isPending}
-                        onClick={() => rejectVisitorMutation.mutate(visitor.id)}
-                      >
-                        <XCircle className="h-4 w-4" />
-                        Rejeitar
-                      </Button>
-                    </div>
-                  ) : null}
-
-                  {visitor.status === "CANCELLED" ? (
-                    <div className="mt-4 rounded-[18px] border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                      Este convite foi cancelado e o acesso temporário associado deixou de ser válido.
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {grantedAccessEvent ? (
-                <div className="mt-4 rounded-[20px] border border-success/25 bg-success/10 px-4 py-3">
-                  <p className="text-sm font-semibold text-success">
-                    Acesso utilizado em {formatOperationalDate(visitor.used_at ?? grantedAccessEvent.event_at)}
+                <div className="mt-4 rounded-[20px] border border-border bg-muted/50 p-3 text-sm">
+                  <p className="font-semibold text-foreground">
+                    {visitor.current_registration.person.name}
                   </p>
-                  <p className="mt-1 text-sm text-success/90">
-                    {grantedAccessContext
-                      ? `Passagem registrada em ${grantedAccessContext}.`
-                      : "A passagem deste convite já foi registrada pela operação."}
+                  <p className="text-muted-foreground">
+                    {visitor.current_registration.person.cpf}
                   </p>
-                </div>
-              ) : null}
-
-              {showLatestAttempt && latestAccessEvent ? (
-                <div
-                  className={`mt-3 rounded-[20px] border px-4 py-3 text-sm ${
-                    latestAccessEvent.granted
-                      ? "border-info/25 bg-info/10 text-info"
-                      : "border-warning/25 bg-warning/10 text-warning"
-                  }`}
-                >
-                  <p className="font-semibold">
-                    Última tentativa {latestAccessEvent.granted ? "liberada" : "negada"} em{" "}
-                    {formatOperationalDate(latestAccessEvent.event_at)}
-                  </p>
-                  <p className="mt-1">
-                    {formatAccessReason(latestAccessEvent.reason)}
-                    {latestAccessContext ? ` • ${latestAccessContext}` : ""}
+                  <p className="mt-2 text-muted-foreground">
+                    Cadastro recebido. A aprovacao final acontece somente no PWA
+                    da portaria.
                   </p>
                 </div>
               ) : null}
@@ -763,7 +562,11 @@ const VisitorsPage = () => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-full"
-                    disabled={rotateLinkMutation.isPending || !canCreateVisitors || visitor.status === "CANCELLED"}
+                    disabled={
+                      rotateLinkMutation.isPending ||
+                      !canCreateVisitors ||
+                      visitor.status === "CANCELLED"
+                    }
                     onClick={() => handleShare(visitor)}
                   >
                     <Share2 className="h-3.5 w-3.5" />
@@ -772,7 +575,11 @@ const VisitorsPage = () => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-full"
-                    disabled={rotateLinkMutation.isPending || !canCreateVisitors || visitor.status === "CANCELLED"}
+                    disabled={
+                      rotateLinkMutation.isPending ||
+                      !canCreateVisitors ||
+                      visitor.status === "CANCELLED"
+                    }
                     onClick={() => handleCopy(visitor)}
                   >
                     <Copy className="h-3.5 w-3.5" />
@@ -781,7 +588,11 @@ const VisitorsPage = () => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-full"
-                    disabled={rotateLinkMutation.isPending || !canCreateVisitors || visitor.status === "CANCELLED"}
+                    disabled={
+                      rotateLinkMutation.isPending ||
+                      !canCreateVisitors ||
+                      visitor.status === "CANCELLED"
+                    }
                     onClick={() => rotateLinkMutation.mutate(visitor.id)}
                   >
                     {rotateLinkMutation.isPending ? (

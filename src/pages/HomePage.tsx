@@ -54,6 +54,7 @@ import {
 import {
   BULLETIN_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
+  VISITORS_MODULE_KEY,
   getBulletinModuleStatus,
   getDeliverySettings,
   getSiteOwnerOverview,
@@ -416,6 +417,7 @@ const ResidentHomePage = () => {
   const canSwitchContext = residents.length > 1;
   const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
   const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  const hasVisitorsModule = sessionHasModule(snapshot, VISITORS_MODULE_KEY);
 
   async function handleSwitchContext(nextId: number) {
     if (nextId === resident.id) {
@@ -441,6 +443,7 @@ const ResidentHomePage = () => {
   const visitorsQuery = useQuery({
     queryKey: ["visitors", resident.id, snapshot.mode, connectionState],
     queryFn: () => listVisitors(snapshot, connectionState, resident),
+    enabled: hasVisitorsModule,
   });
 
   const bulletinStatusQuery = useQuery({
@@ -500,14 +503,18 @@ const ResidentHomePage = () => {
 
   // ─── Derived data ───
   const quickActions = [
-    {
-      icon: Users,
-      label: "Visitantes",
-      path: "/visitors",
-      tone: "bg-blue-500/10 text-blue-600",
-      description: "Convites e acessos",
-      badgeCount: attentionCounts.visitors,
-    },
+    ...(hasVisitorsModule
+      ? [
+          {
+            icon: Users,
+            label: "Visitantes",
+            path: "/visitors",
+            tone: "bg-blue-500/10 text-blue-600",
+            description: "Convites e acessos",
+            badgeCount: attentionCounts.visitors,
+          },
+        ]
+      : []),
     {
       icon: CalendarClock,
       label: "Áreas comuns",

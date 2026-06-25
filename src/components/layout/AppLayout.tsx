@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import {
   CHAT_MODULE_KEY,
   INCIDENTS_MODULE_KEY,
+  VISITORS_MODULE_KEY,
   isSiteOwnerProfile,
   sessionHasModule,
 } from "@/services/mobile-app.service";
@@ -47,6 +48,8 @@ const AppLayout = () => {
   const visibleTabs = tabs.filter(
     (tab) =>
       (!isSiteOwner || tab.path === "/" || tab.path === "/profile") &&
+      (tab.path !== "/visitors" ||
+        sessionHasModule(snapshot, VISITORS_MODULE_KEY)) &&
       (tab.path !== "/chat" || sessionHasModule(snapshot, CHAT_MODULE_KEY)) &&
       (tab.path !== "/porteiro/incidentes" ||
         sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)),

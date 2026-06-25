@@ -10,11 +10,8 @@ import {
   Package,
   ShieldAlert,
   UserCheck,
-  XCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,8 +23,6 @@ import {
 import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
 import {
   INCIDENTS_MODULE_KEY,
-  approveVisitor,
-  rejectVisitor,
   sessionHasModule,
 } from "@/services/mobile-app.service";
 
@@ -76,11 +71,8 @@ function notificationToneClasses(notification: ResidentNotification) {
 
 const NotificationsPage = () => {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const {
-    resident,
     snapshot,
-    connectionState,
     notifications,
     readMap,
     unreadByModule,
@@ -102,67 +94,15 @@ const NotificationsPage = () => {
         .length,
     [readMap, visibleNotifications],
   );
-
   const pendingApprovalCount = visibleNotifications.filter(
     (notification) => notification.kind === "VISITOR_PENDING_APPROVAL",
   ).length;
-
-  const operationalCount = useMemo(
-    () =>
-      visibleNotifications.filter(
-        (notification) => notification.kind !== "VISITOR_PENDING_APPROVAL",
-      ).length,
-    [visibleNotifications],
-  );
-
-  const approveMutation = useMutation({
-    mutationFn: async ({
-      visitorId,
-      notificationId,
-    }: {
-      visitorId: number;
-      notificationId: string;
-    }) => approveVisitor(snapshot, connectionState, resident, visitorId),
-    onSuccess: async (_updated, variables) => {
-      markAsRead([variables.notificationId]);
-      await queryClient.invalidateQueries({
-        queryKey: ["visitors", resident.id],
-      });
-      toast.success("Convidado aprovado e liberado.");
-    },
-    onError: (error) => {
-      toast.error(
-        error instanceof Error ? error.message : "Não foi possível aprovar.",
-      );
-    },
-  });
-
-  const rejectMutation = useMutation({
-    mutationFn: async ({
-      visitorId,
-      notificationId,
-    }: {
-      visitorId: number;
-      notificationId: string;
-    }) => rejectVisitor(snapshot, connectionState, resident, visitorId),
-    onSuccess: async (_updated, variables) => {
-      markAsRead([variables.notificationId]);
-      await queryClient.invalidateQueries({
-        queryKey: ["visitors", resident.id],
-      });
-      toast.success("Cadastro rejeitado.");
-    },
-    onError: (error) => {
-      toast.error(
-        error instanceof Error ? error.message : "Não foi possível rejeitar.",
-      );
-    },
-  });
+  const operationalCount = visibleNotifications.length - pendingApprovalCount;
 
   return (
     <div className="space-y-6 px-4 pb-6 pt-8">
       <PageHeader
-        title="Notificações"
+        title="Notificacoes"
         subtitle="Inbox unificada de visitantes, entregas, mural e chat."
         backTo="/"
       />
@@ -174,39 +114,29 @@ const NotificationsPage = () => {
               Caixa operacional do contexto ativo
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {resident.role === "SINDICO"
-                ? "Visão de monitoramento do site selecionado."
-                : "Cadastros aguardando sua aprovação e confirmações de uso dos convites."}
+              Visitantes pendentes devem ser aprovados pela portaria no PWA.
             </p>
           </div>
-          <Badge variant={visibleUnreadCount > 0 ? "warning" : "secondary"}>
-            {`${visibleUnreadCount} não lida${visibleUnreadCount === 1 ? "" : "s"}`}
+          <Badge variant={visibleUnreadCount > 0 ? "info" : "secondary"}>
+            {visibleUnreadCount} nova(s)
           </Badge>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
           <div className="rounded-[18px] bg-muted px-3 py-2">
-            Ações pendentes: <strong>{pendingApprovalCount}</strong>
+            Operacionais: <strong>{operationalCount}</strong>
           </div>
           <div className="rounded-[18px] bg-muted px-3 py-2">
-            Retornos operacionais: <strong>{operationalCount}</strong>
+            Portaria: <strong>{pendingApprovalCount}</strong>
           </div>
         </div>
 
-        {visibleUnreadCount > 0 ? (
-          <div className="mt-4 flex justify-end">
-            <Button
-              variant="outline"
-              className="rounded-full"
-              onClick={() =>
-                markAsRead(visibleNotifications.map((item) => item.id))
-              }
-            >
-              <BellRing className="h-4 w-4" />
-              Marcar tudo como lido
-            </Button>
-          </div>
-        ) : null}
+        <div className="mt-4 flex flex-wrap gap-2 text-xs">
+          <Badge variant="secondary">Visitantes {unreadByModule.VISITORS ?? 0}</Badge>
+          <Badge variant="secondary">Entregas {unreadByModule.DELIVERIES ?? 0}</Badge>
+          <Badge variant="secondary">Incidentes {unreadByModule.INCIDENTS ?? 0}</Badge>
+          <Badge variant="secondary">Chat {unreadByModule.CHAT ?? 0}</Badge>
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -214,19 +144,21 @@ const NotificationsPage = () => {
           const Icon = notificationIcon(notification);
           const isRead = Boolean(readMap[notification.id]);
           const isPendingApproval =
-            notification.kind === "VISITOR_PENDING_APPROVAL" &&
-            resident.role !== "SINDICO";
+            notification.kind === "VISITOR_PENDING_APPROVAL";
 
           return (
-            <div
+            <button
               key={notification.id}
-              className={`rounded-[24px] border bg-card p-4 shadow-sm transition-colors ${
-                isRead ? "border-border/80" : "border-primary/20"
-              }`}
+              type="button"
+              className="w-full rounded-[24px] border border-border bg-card p-4 text-left shadow-sm transition active:scale-[0.99]"
+              onClick={() => {
+                markAsRead([notification.id]);
+                navigate(notification.target_path);
+              }}
             >
-              <div className="flex items-start gap-3">
+              <div className="flex gap-3">
                 <div
-                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${notificationToneClasses(
+                  className={`mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${notificationToneClasses(
                     notification,
                   )}`}
                 >
@@ -245,106 +177,39 @@ const NotificationsPage = () => {
                     {notification.description}
                   </p>
 
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>{formatWhen(notification.created_at)}</span>
-                    {notification.site_name ? (
-                      <span>• {notification.site_name}</span>
-                    ) : null}
-                    {notification.unit_label ? (
-                      <span>• {notification.unit_label}</span>
-                    ) : null}
-                  </div>
-
-                  {notification.event &&
-                  notification.kind !== "VISITOR_PENDING_APPROVAL" ? (
+                  {notification.event && !isPendingApproval ? (
                     <div className="mt-3 rounded-[18px] bg-muted px-3 py-2 text-sm text-muted-foreground">
                       {formatVisitorAccessReason(notification.event.reason)}
                     </div>
                   ) : null}
 
                   {isPendingApproval ? (
-                    <div className="mt-4 flex gap-2">
-                      <Button
-                        variant="accent"
-                        className="flex-1"
-                        disabled={approveMutation.isPending}
-                        onClick={() =>
-                          approveMutation.mutate({
-                            visitorId: notification.visitor_id,
-                            notificationId: notification.id,
-                          })
-                        }
-                      >
-                        <Check className="h-4 w-4" />
-                        Aprovar
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="flex-1"
-                        disabled={rejectMutation.isPending}
-                        onClick={() =>
-                          rejectMutation.mutate({
-                            visitorId: notification.visitor_id,
-                            notificationId: notification.id,
-                          })
-                        }
-                      >
-                        <XCircle className="h-4 w-4" />
-                        Rejeitar
-                      </Button>
+                    <div className="mt-3 rounded-[18px] border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+                      A aprovacao deste visitante deve ser feita na fila do PWA.
                     </div>
-                  ) : (
-                    <div className="mt-4 flex justify-end">
-                      <Button
-                        variant="ghost"
-                        className="rounded-full"
-                        onClick={() => {
-                          markAsRead([notification.id]);
-                          navigate(notification.target_path);
-                        }}
-                      >
-                        {notification.action_label}
-                        <ChevronRight className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  )}
+                  ) : null}
+
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <span className="text-xs text-muted-foreground">
+                      {formatWhen(notification.created_at)}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-sm font-medium text-primary">
+                      {notification.action_label}
+                      <ChevronRight className="h-4 w-4" />
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
+            </button>
           );
         })}
 
         {visibleNotifications.length === 0 ? (
           <div className="rounded-[24px] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
-            Nenhuma notificação operacional disponível para este contexto.
+            Nenhuma notificacao no contexto atual.
           </div>
         ) : null}
       </div>
-
-      {visibleNotifications.length > 0 ? (
-        <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
-          <p className="text-sm font-semibold text-foreground">
-            Distribuição por módulo
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Badge variant="secondary">
-              Visitantes {unreadByModule.VISITORS ?? 0}
-            </Badge>
-            <Badge variant="secondary">
-              Entregas {unreadByModule.DELIVERIES ?? 0}
-            </Badge>
-            {hasIncidentsModule ? (
-              <Badge variant="secondary">
-                Incidentes {unreadByModule.INCIDENTS ?? 0}
-              </Badge>
-            ) : null}
-            <Badge variant="secondary">
-              Mural {unreadByModule.BULLETIN ?? 0}
-            </Badge>
-            <Badge variant="secondary">Chat {unreadByModule.CHAT ?? 0}</Badge>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 };

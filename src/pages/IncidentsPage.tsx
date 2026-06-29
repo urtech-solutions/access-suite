@@ -46,12 +46,11 @@ import {
   createIncident,
   getIncident,
   getIncidentSettings,
-  INCIDENTS_MODULE_KEY,
   listIncidentParticipantOptions,
   listIncidents,
   normalizeApiBaseUrl,
   sendIncidentMessage,
-  sessionHasModule,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 import type {
   IncidentAttachment,
@@ -229,7 +228,7 @@ function AttachmentChip({
 export default function IncidentsPage() {
   const { snapshot } = useSession();
 
-  if (!sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)) {
+  if (!sessionHasCapability(snapshot, "incidents.view")) {
     return <Navigate to="/" replace />;
   }
 
@@ -239,6 +238,11 @@ export default function IncidentsPage() {
 function IncidentsContent() {
   const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
+  const canCreateIncidentCapability = sessionHasCapability(
+    snapshot,
+    "incidents.create",
+  );
+  const canCommentIncident = sessionHasCapability(snapshot, "incidents.comment");
   const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null);
   const [topicFilter, setTopicFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | IncidentStatus>("all");
@@ -314,7 +318,7 @@ function IncidentsContent() {
       connectionState,
     ],
     queryFn: () => listIncidentParticipantOptions(snapshot, connectionState, resident),
-    enabled: createDialogOpen,
+    enabled: canCreateIncidentCapability && createDialogOpen,
   });
 
   const selectedIncident =
@@ -346,6 +350,7 @@ function IncidentsContent() {
       ),
   );
   const canCreateIncident =
+    canCreateIncidentCapability &&
     createTitle.trim().length > 0 &&
     createDescription.trim().length > 0 &&
     Boolean(createTopicId) &&
@@ -361,6 +366,11 @@ function IncidentsContent() {
   }
 
   function openCreateDialog() {
+    if (!canCreateIncidentCapability) {
+      toast.error("Sua visao nao permite abrir incidentes.");
+      return;
+    }
+
     setCreateTopicId((current) => current || String(availableTopics[0]?.id ?? ""));
     setCreateRequesterPersonId((current) =>
       current || (residentPersonId ? String(residentPersonId) : ""),
@@ -658,6 +668,7 @@ function IncidentsContent() {
           </div>
         </section>
 
+        {canCommentIncident ? (
         <section className="rounded-[28px] border border-border bg-card p-4 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
@@ -733,6 +744,7 @@ function IncidentsContent() {
             </Button>
           </div>
         </section>
+        ) : null}
 
         <section className="space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-[0.24em] text-muted-foreground">
@@ -791,14 +803,16 @@ function IncidentsContent() {
         backTo="/"
         className="pb-4 pt-[calc(1rem+env(safe-area-inset-top,0px))]"
         action={
-          <Button
-            size="sm"
-            className="shrink-0 rounded-xl"
-            onClick={openCreateDialog}
-          >
-            <Plus className="h-4 w-4" />
-            Novo
-          </Button>
+          canCreateIncidentCapability ? (
+            <Button
+              size="sm"
+              className="shrink-0 rounded-xl"
+              onClick={openCreateDialog}
+            >
+              <Plus className="h-4 w-4" />
+              Novo
+            </Button>
+          ) : null
         }
       />
 

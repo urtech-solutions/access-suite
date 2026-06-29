@@ -38,6 +38,7 @@ import {
   listCommonAreas,
   listReservations,
   rotateReservationLink,
+  sessionHasCapability,
   updateReservationHeadcount,
 } from "@/services/mobile-app.service";
 import type {
@@ -535,7 +536,17 @@ function reservationStatusMeta(status: ReservationEntry["status"]) {
 const CommonAreasPage = () => {
   const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
-  const canCreateReservation = resident.role !== "SINDICO";
+  const canCreateReservation =
+    resident.role !== "SINDICO" &&
+    sessionHasCapability(snapshot, "reservations.create");
+  const canUpdateReservationHeadcount = sessionHasCapability(
+    snapshot,
+    "reservations.update_headcount",
+  );
+  const canRotateReservationLink = sessionHasCapability(
+    snapshot,
+    "reservations.rotate_link",
+  );
   const todayValue = useMemo(() => toDateInputValue(new Date()), []);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [timelineAreaId, setTimelineAreaId] = useState<number | null>(null);
@@ -1767,7 +1778,7 @@ const CommonAreasPage = () => {
               currentHeadcountValue > reservation.area.capacity,
             );
           const linkActionsEnabled =
-            canCreateReservation &&
+            canRotateReservationLink &&
             reservation.status === "CONFIRMED";
 
           return (
@@ -1812,7 +1823,7 @@ const CommonAreasPage = () => {
                 </div>
               </div>
 
-              {isDuringEvent ? (
+              {isDuringEvent && canUpdateReservationHeadcount ? (
                 <div className="mt-4 rounded-[20px] border border-border bg-muted/40 p-3">
                   <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
                     Ajustar lotação agora

@@ -21,7 +21,6 @@ import {
   TicketCheck,
   UserRound,
   Users,
-  Wallet,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -52,9 +51,6 @@ import {
   type BrowserNotificationPermissionState,
 } from "@/lib/browser-notifications";
 import {
-  BULLETIN_MODULE_KEY,
-  INCIDENTS_MODULE_KEY,
-  VISITORS_MODULE_KEY,
   getBulletinModuleStatus,
   getDeliverySettings,
   getSiteOwnerOverview,
@@ -65,7 +61,7 @@ import {
   listIncidents,
   listReservations,
   listVisitors,
-  sessionHasModule,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 import { cn } from "@/lib/utils";
 
@@ -415,9 +411,12 @@ const ResidentHomePage = () => {
   const [switchingId, setSwitchingId] = useState<number | null>(null);
 
   const canSwitchContext = residents.length > 1;
-  const hasBulletinModule = sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
-  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
-  const hasVisitorsModule = sessionHasModule(snapshot, VISITORS_MODULE_KEY);
+  const hasBulletinModule = sessionHasCapability(snapshot, "bulletin.view");
+  const hasIncidentsModule = sessionHasCapability(snapshot, "incidents.view");
+  const hasVisitorsModule = sessionHasCapability(snapshot, "visitors.view");
+  const hasCommonAreasModule = sessionHasCapability(snapshot, "common_areas.view");
+  const hasReservationsModule = sessionHasCapability(snapshot, "reservations.view");
+  const hasDeliveriesModule = sessionHasCapability(snapshot, "deliveries.view");
 
   async function handleSwitchContext(nextId: number) {
     if (nextId === resident.id) {
@@ -468,11 +467,13 @@ const ResidentHomePage = () => {
   const reservationsQuery = useQuery({
     queryKey: ["reservations", resident.id, snapshot.mode, connectionState],
     queryFn: () => listReservations(snapshot, connectionState, resident),
+    enabled: hasReservationsModule,
   });
 
   const areasQuery = useQuery({
     queryKey: ["common-areas", snapshot.mode, connectionState],
     queryFn: () => listCommonAreas(snapshot, connectionState),
+    enabled: hasCommonAreasModule,
   });
 
   const deliverySettingsQuery = useQuery({
@@ -483,15 +484,17 @@ const ResidentHomePage = () => {
       connectionState,
     ],
     queryFn: () => getDeliverySettings(snapshot, connectionState),
+    enabled: hasDeliveriesModule,
   });
 
   const deliveriesQuery = useQuery({
     queryKey: ["deliveries", resident.id, snapshot.mode, connectionState],
     queryFn: () => listDeliveries(snapshot, connectionState, resident),
-    enabled: deliverySettingsQuery.data?.enabled !== false,
+    enabled: hasDeliveriesModule && deliverySettingsQuery.data?.enabled !== false,
   });
 
   const deliveryEnabled =
+    hasDeliveriesModule &&
     resident.role === "MORADOR" &&
     deliverySettingsQuery.data?.enabled !== false;
 
@@ -515,14 +518,18 @@ const ResidentHomePage = () => {
           },
         ]
       : []),
-    {
-      icon: CalendarClock,
-      label: "Áreas comuns",
-      path: "/common-areas",
-      tone: "bg-emerald-500/10 text-emerald-600",
-      description: "Reservar espaços",
-      badgeCount: 0,
-    },
+    ...(hasCommonAreasModule
+      ? [
+          {
+            icon: CalendarClock,
+            label: "Áreas comuns",
+            path: "/common-areas",
+            tone: "bg-emerald-500/10 text-emerald-600",
+            description: "Reservar espaços",
+            badgeCount: 0,
+          },
+        ]
+      : []),
     ...(deliveryEnabled
       ? [
           {
@@ -559,14 +566,6 @@ const ResidentHomePage = () => {
           },
         ]
       : []),
-    {
-      icon: Wallet,
-      label: "Financeiro",
-      path: "/financeiro",
-      tone: "bg-teal-500/10 text-teal-600",
-      description: "Pagamentos e multas",
-      badgeCount: 0,
-    },
   ];
 
   const deliveries = deliveriesQuery.data ?? [];

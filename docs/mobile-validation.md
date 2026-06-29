@@ -198,6 +198,49 @@ Validacoes de API recomendadas:
   com outro `site_id` deve ser recusado;
 - o resumo deve retornar apenas dados do site do contexto ativo.
 
+## Validacao de visoes configuraveis
+
+Para validar a autorizacao configuravel do Access Suite:
+
+1. no Management, acesse `/peoples/access-suite-views`;
+2. selecione o site ativo;
+3. crie uma visao `Morador completo` com os modulos e acoes esperados;
+4. vincule a visao ao tipo de pessoa usado por um morador real;
+5. crie uma visao `Visitante basico` com apenas as capacidades desejadas;
+6. vincule a visao ao tipo de pessoa usado por um visitante real;
+7. confirme no preview da tela que cada pessoa recebe a uniao correta das
+   capacidades das tags ativas;
+8. entre no app com cada pessoa e valide a navegacao.
+
+Resultado esperado para `Morador completo`:
+
+- `auth/access-os/login` e `auth/access-os/me` retornam
+  `user.access_suite.modules`, `user.access_suite.capabilities` e
+  `user.access_suite.views`;
+- tabs, cards e botoes aparecem somente para capacidades liberadas;
+- acoes permitidas executam normalmente;
+- `user.modules` continua preenchido para compatibilidade.
+
+Resultado esperado para `Visitante basico`:
+
+- o app mostra apenas Inicio, Perfil, Notificacoes e os modulos explicitamente
+  liberados pela visao;
+- botoes de criar, cancelar, confirmar, comentar ou enviar mensagem nao
+  aparecem sem capacidade correspondente;
+- rota direta para modulo sem permissao mostra sem acesso ou redireciona para a
+  home, conforme a rota.
+
+Validacoes negativas:
+
+- chamada direta de API sem capacidade deve retornar `403` quando o modulo do
+  tenant/site estiver habilitado;
+- tag expirada em `person_type_assignments` nao deve contribuir permissao;
+- pessoa com multiplas tags ativas deve receber a uniao das visoes vinculadas;
+- ao alterar uma visao no Management, a mudanca deve refletir apos
+  reidratacao em `auth/access-os/me` ou novo login;
+- `APP_USER OWNER` permanece fora das visoes configuraveis e continua somente
+  leitura em Inicio e Perfil.
+
 ## Atualizacao 2026-06-07
 
 - o app nao alterna mais para modo `preview`; toda validacao deve assumir

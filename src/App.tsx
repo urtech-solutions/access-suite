@@ -17,7 +17,11 @@ import { ResidentWebPushBridge } from "@/features/notifications/ResidentWebPushB
 import { ResidentRealtimeBridge } from "@/features/realtime/ResidentRealtimeBridge";
 import { useSession } from "@/features/session/SessionProvider";
 import { AppProviders } from "@/providers/AppProviders";
-import { isSiteOwnerProfile } from "@/services/mobile-app.service";
+import {
+  isSiteOwnerProfile,
+  sessionHasCapability,
+} from "@/services/mobile-app.service";
+import type { AccessSuiteCapability } from "@/services/mobile-app.types";
 
 const AuthPage = lazy(() => import("@/pages/AuthPage"));
 const AccessInvitesPage = lazy(() => import("@/pages/AccessInvitesPage"));
@@ -40,11 +44,39 @@ const ScreenLoader = () => (
   </div>
 );
 
+const routerBasename = import.meta.env.BASE_URL.startsWith("/")
+  ? import.meta.env.BASE_URL
+  : "/";
+
 const AUTH_CONTEXT_SELECTION_KEY = "sv-mobile:pending-auth-context-selection";
 
 const limitedTabs = [
   { path: "/", icon: Home, label: "Início", exact: true },
   { path: "/profile", icon: UserRound, label: "Conta", exact: false },
+];
+
+const routeCapabilities: Array<{
+  capability: AccessSuiteCapability;
+  matches: (pathname: string) => boolean;
+}> = [
+  { capability: "home.view", matches: (pathname) => pathname === "/" },
+  { capability: "profile.view", matches: (pathname) => pathname === "/profile" },
+  { capability: "visitors.view", matches: (pathname) => pathname === "/visitors" },
+  {
+    capability: "common_areas.view",
+    matches: (pathname) => pathname === "/common-areas",
+  },
+  { capability: "deliveries.view", matches: (pathname) => pathname === "/deliveries" },
+  {
+    capability: "incidents.view",
+    matches: (pathname) => pathname.startsWith("/porteiro/incidentes"),
+  },
+  { capability: "chat.view", matches: (pathname) => pathname === "/chat" },
+  { capability: "bulletin.view", matches: (pathname) => pathname === "/bulletin" },
+  {
+    capability: "notifications.view",
+    matches: (pathname) => pathname === "/notifications",
+  },
 ];
 
 const AuthRoute = () => {
@@ -144,6 +176,21 @@ const ProtectedShell = () => {
     }
   }
 
+  const requiredRouteCapability = routeCapabilities.find((entry) =>
+    entry.matches(location.pathname),
+  )?.capability;
+
+  if (
+    requiredRouteCapability &&
+    !sessionHasCapability(snapshot, requiredRouteCapability)
+  ) {
+    return <NoAccessPage />;
+  }
+
+  if (location.pathname === "/financeiro") {
+    return <NoAccessPage />;
+  }
+
   return (
     <ChatCallsProvider>
       <ResidentRealtimeBridge />
@@ -157,7 +204,7 @@ const ProtectedShell = () => {
 const App = () => (
   <AppProviders>
     <BrowserRouter
-      basename={import.meta.env.BASE_URL}
+      basename={routerBasename}
       future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
     >
       <Suspense fallback={<ScreenLoader />}>

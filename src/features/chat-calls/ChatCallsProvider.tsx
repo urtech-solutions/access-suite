@@ -23,10 +23,9 @@ import {
 } from "@/features/chat-calls/chat-calls-context";
 import { useSession } from "@/features/session/SessionProvider";
 import {
-  CHAT_MODULE_KEY,
   canUseResidentAppBackend,
   isSiteOwnerProfile,
-  sessionHasModule,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 
 type IceServer = { urls: string | string[]; username?: string; credential?: string };
@@ -85,7 +84,7 @@ export function ChatCallsProvider({ children }: { children: ReactNode }) {
     resident,
   );
   const hasChatModule =
-    canUseResidentAppRequests && sessionHasModule(snapshot, CHAT_MODULE_KEY);
+    canUseResidentAppRequests && sessionHasCapability(snapshot, "chat.view");
   const socketRef = useRef<Socket | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);

@@ -10,6 +10,32 @@ export type ResidentAppProfileType = "APP_USER" | "RESIDENT" | "SYNDIC";
 
 export type ConnectionState = "online" | "offline";
 export type TenantModuleKey = "INCIDENTS" | string;
+export type AccessSuiteCapability =
+  | "home.view"
+  | "profile.view"
+  | "notifications.view"
+  | "visitors.view"
+  | "visitors.create"
+  | "visitors.cancel"
+  | "visitors.rotate_link"
+  | "common_areas.view"
+  | "reservations.view"
+  | "reservations.create"
+  | "reservations.cancel"
+  | "reservations.update_headcount"
+  | "reservations.rotate_link"
+  | "deliveries.view"
+  | "deliveries.confirm"
+  | "deliveries.contest"
+  | "bulletin.view"
+  | "bulletin.create"
+  | "incidents.view"
+  | "incidents.create"
+  | "incidents.comment"
+  | "chat.view"
+  | "chat.send"
+  | "chat.direct_message"
+  | "chat.portaria";
 
 export type VisitorStatus =
   | "PENDING"
@@ -141,6 +167,19 @@ export interface ResidentAppUser {
   name?: string | null;
   email?: string | null;
   modules: TenantModuleKey[];
+  access_suite?: AccessSuiteEffectiveAccess | null;
+}
+
+export interface AccessSuiteEffectiveAccess {
+  modules: TenantModuleKey[];
+  capabilities: AccessSuiteCapability[];
+  views: AccessSuiteViewSummary[];
+}
+
+export interface AccessSuiteViewSummary {
+  uuid: string;
+  name: string;
+  description?: string | null;
 }
 
 export interface ResidentProfile {

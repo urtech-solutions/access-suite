@@ -28,7 +28,7 @@ const config: CapacitorConfig = {
   android: {
     // O build usa VITE_API_URL=https://api.urtechsolucoes.com (sem proxy nginx)
     // Permite requisições para domínio externo a partir da WebView
-    allowMixedContent: false,     // HTTPS obrigatório em produção
+    allowMixedContent: true,     // HTTPS obrigatório em produção
     captureInput: true,           // melhora UX em campos de formulário
     webContentsDebuggingEnabled: false, // true somente em debug builds
   },

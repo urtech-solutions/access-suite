@@ -12,11 +12,8 @@ import { useResidentNotificationCenter } from "@/features/notifications/useResid
 import { useSession } from "@/features/session/SessionProvider";
 import { cn } from "@/lib/utils";
 import {
-  CHAT_MODULE_KEY,
-  INCIDENTS_MODULE_KEY,
-  VISITORS_MODULE_KEY,
   isSiteOwnerProfile,
-  sessionHasModule,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 
 const tabs = [
@@ -49,10 +46,12 @@ const AppLayout = () => {
     (tab) =>
       (!isSiteOwner || tab.path === "/" || tab.path === "/profile") &&
       (tab.path !== "/visitors" ||
-        sessionHasModule(snapshot, VISITORS_MODULE_KEY)) &&
-      (tab.path !== "/chat" || sessionHasModule(snapshot, CHAT_MODULE_KEY)) &&
+        sessionHasCapability(snapshot, "visitors.view")) &&
+      (tab.path !== "/common-areas" ||
+        sessionHasCapability(snapshot, "common_areas.view")) &&
+      (tab.path !== "/chat" || sessionHasCapability(snapshot, "chat.view")) &&
       (tab.path !== "/porteiro/incidentes" ||
-        sessionHasModule(snapshot, INCIDENTS_MODULE_KEY)),
+        sessionHasCapability(snapshot, "incidents.view")),
   );
 
   function isTabActive(tab: (typeof tabs)[number]) {

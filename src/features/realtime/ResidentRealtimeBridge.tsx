@@ -4,11 +4,9 @@ import { io, type Socket } from "socket.io-client";
 
 import { useSession } from "@/features/session/SessionProvider";
 import {
-  CHAT_MODULE_KEY,
-  INCIDENTS_MODULE_KEY,
   canUseResidentAppBackend,
   isSiteOwnerProfile,
-  sessionHasModule,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 
 type RealtimeModuleEvent = {
@@ -74,10 +72,10 @@ export function ResidentRealtimeBridge() {
     [snapshot.apiBaseUrl],
   );
   const hasChatModule =
-    canUseResidentAppRequests && sessionHasModule(snapshot, CHAT_MODULE_KEY);
+    canUseResidentAppRequests && sessionHasCapability(snapshot, "chat.view");
   const hasIncidentsModule =
     canUseResidentAppRequests &&
-    sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+    sessionHasCapability(snapshot, "incidents.view");
 
   useEffect(() => {
     if (

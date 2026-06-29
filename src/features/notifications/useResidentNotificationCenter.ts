@@ -10,9 +10,6 @@ import {
   type ResidentNotificationScope,
 } from "@/features/notifications/resident-notifications";
 import {
-  BULLETIN_MODULE_KEY,
-  CHAT_MODULE_KEY,
-  INCIDENTS_MODULE_KEY,
   canUseResidentAppBackend,
   getBulletinModuleStatus,
   getChatSettings,
@@ -23,7 +20,7 @@ import {
   listDeliveries,
   listIncidents,
   listVisitors,
-  sessionHasModule,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 
 export function useResidentNotificationCenter() {
@@ -54,12 +51,17 @@ export function useResidentNotificationCenter() {
   );
   const hasBulletinModule =
     canUseResidentAppRequests &&
-    sessionHasModule(snapshot, BULLETIN_MODULE_KEY);
+    sessionHasCapability(snapshot, "bulletin.view");
   const hasChatModule =
-    canUseResidentAppRequests && sessionHasModule(snapshot, CHAT_MODULE_KEY);
+    canUseResidentAppRequests && sessionHasCapability(snapshot, "chat.view");
   const hasIncidentsModule =
     canUseResidentAppRequests &&
-    sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+    sessionHasCapability(snapshot, "incidents.view");
+  const hasVisitorsModule =
+    canUseResidentAppRequests && sessionHasCapability(snapshot, "visitors.view");
+  const hasDeliveriesModule =
+    canUseResidentAppRequests &&
+    sessionHasCapability(snapshot, "deliveries.view");
 
   useEffect(() => {
     setReadMap(readNotificationReadMap(notificationScope));
@@ -76,7 +78,7 @@ export function useResidentNotificationCenter() {
   const visitorsQuery = useQuery({
     queryKey: ["visitors", resident.id, snapshot.mode, connectionState],
     queryFn: () => listVisitors(snapshot, connectionState, resident),
-    enabled: canUseResidentAppRequests,
+    enabled: hasVisitorsModule,
   });
 
   const deliverySettingsQuery = useQuery({
@@ -87,7 +89,7 @@ export function useResidentNotificationCenter() {
       connectionState,
     ],
     queryFn: () => getDeliverySettings(snapshot, connectionState),
-    enabled: canUseResidentAppRequests,
+    enabled: hasDeliveriesModule,
   });
 
   const deliveriesQuery = useQuery({
@@ -95,6 +97,7 @@ export function useResidentNotificationCenter() {
     queryFn: () => listDeliveries(snapshot, connectionState, resident),
     enabled:
       canUseResidentAppRequests &&
+      hasDeliveriesModule &&
       resident.role === "MORADOR" &&
       deliverySettingsQuery.data?.enabled !== false,
   });

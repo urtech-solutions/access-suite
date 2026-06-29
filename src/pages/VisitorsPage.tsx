@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Clock3,
   Copy,
@@ -40,15 +40,9 @@ import {
   getVisitorSettings,
   listVisitors,
   rotateVisitorLink,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 import type { VisitorEntry } from "@/services/mobile-app.types";
-
-type VisitorListFilter =
-  | "ALL"
-  | "ONGOING"
-  | "PENDING_APPROVAL"
-  | "HISTORY"
-  | "CANCELLED";
 
 const statusConfig = {
   PENDING: { label: "Aguardando cadastro", variant: "warning" as const, icon: Clock3 },
@@ -91,14 +85,22 @@ function rangeInDays(startDate: string, endDate: string) {
 const VisitorsPage = () => {
   const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
-  const canCreateVisitors = resident.role !== "SINDICO";
+  const canCreateVisitors =
+    resident.role !== "SINDICO" &&
+    sessionHasCapability(snapshot, "visitors.create");
+  const canCancelVisitors = sessionHasCapability(snapshot, "visitors.cancel");
+  const canRotateVisitorLinks = sessionHasCapability(
+    snapshot,
+    "visitors.rotate_link",
+  );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [selectedGuestTypeId, setSelectedGuestTypeId] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [visitorFilter, setVisitorFilter] =
-    useState<VisitorListFilter>("ONGOING");
+  const [selectedVisitor, setSelectedVisitor] = useState<VisitorEntry | null>(
+    null,
+  );
 
   const settingsQuery = useQuery({
     queryKey: ["visitor-settings", resident.id, snapshot.mode, connectionState],
@@ -252,28 +254,13 @@ const VisitorsPage = () => {
   }
 
   const visitors = visitorsQuery.data ?? [];
-  const activeVisitors = visitors.filter((visitor) =>
+  const displayedVisitors = visitors;
+  const pendingVisitors = visitors.filter((visitor) =>
     ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(visitor.status),
   );
-  const historyVisitors = visitors.filter((visitor) =>
-    ["EXPIRED", "REJECTED", "CANCELLED", "USED"].includes(visitor.status),
+  const expiredVisitors = visitors.filter(
+    (visitor) => visitor.status === "EXPIRED",
   );
-  const pendingApprovals = visitors.filter(
-    (visitor) => visitor.status === "PENDING_APPROVAL",
-  );
-  const displayedVisitors = visitors.filter((visitor) => {
-    if (visitorFilter === "ALL") return true;
-    if (visitorFilter === "ONGOING") {
-      return ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(visitor.status);
-    }
-    if (visitorFilter === "PENDING_APPROVAL") {
-      return visitor.status === "PENDING_APPROVAL";
-    }
-    if (visitorFilter === "CANCELLED") {
-      return visitor.status === "CANCELLED";
-    }
-    return ["EXPIRED", "REJECTED", "CANCELLED", "USED"].includes(visitor.status);
-  });
 
   const effectiveEndDate = endDate || startDate;
   const selectedDuration =
@@ -284,14 +271,6 @@ const VisitorsPage = () => {
     Boolean(settings?.max_duration_days) &&
     selectedDuration > settings.max_duration_days;
 
-  const pageSubtitle = useMemo(() => {
-    if (!canCreateVisitors) {
-      return `Acompanhamento dos convites do site ativo para ${resident.name}`;
-    }
-
-    return `Convites para cadastro e acesso fisico vinculados a ${resident.name}`;
-  }, [canCreateVisitors, resident.name]);
-
   const createDisabled =
     !guestName.trim() ||
     !startDate ||
@@ -299,13 +278,22 @@ const VisitorsPage = () => {
     exceedsDuration ||
     !selectedRule ||
     createVisitorMutation.isPending;
+  const selectedVisitorConfig = selectedVisitor
+    ? statusConfig[selectedVisitor.status]
+    : null;
+  const selectedVisitorCanCancel =
+    Boolean(selectedVisitor) &&
+    canCancelVisitors &&
+    ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(
+      selectedVisitor?.status ?? "",
+    );
 
   return (
-    <div className="space-y-6 px-4 pb-6 pt-8">
+    <div className="space-y-4 px-4 pb-6 pt-3">
       <PageHeader
         title="Visitantes"
-        subtitle={pageSubtitle}
         backTo="/"
+        className="-mx-4 pb-2 pt-[calc(0.5rem+env(safe-area-inset-top,0px))]"
         action={
           canCreateVisitors ? (
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -313,7 +301,7 @@ const VisitorsPage = () => {
                 <Button
                   variant="accent"
                   size="sm"
-                  className="rounded-full"
+                  className="h-10 rounded-full px-3.5 shadow-accent/20"
                   disabled={
                     settingsQuery.isLoading ||
                     !settings?.allow_resident_creation ||
@@ -439,75 +427,46 @@ const VisitorsPage = () => {
         }
       />
 
-      <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-foreground">
-              {activeVisitors.length} convite(s) em andamento
-            </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {pendingApprovals.length} aguardando aprovacao da portaria no PWA.
-            </p>
-          </div>
-          <Badge variant={settings?.enabled === false ? "secondary" : "info"}>
-            {settings?.enabled === false ? "Modulo inativo" : "Modulo ativo"}
-          </Badge>
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-[18px] border border-border bg-card px-3 py-3 shadow-sm">
+          <p className="text-[11px] font-medium text-muted-foreground">
+            Total
+          </p>
+          <p className="mt-1 text-xl font-bold leading-none text-foreground">
+            {visitors.length}
+          </p>
         </div>
-
-        {!canCreateByRule ? (
-          <div className="mt-4 rounded-[18px] border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-            Seu tipo de pessoa ainda nao possui regra ativa para convidar
-            visitantes neste site.
-          </div>
-        ) : null}
-
-        <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-          <div className="rounded-[18px] bg-muted px-3 py-2">
-            Em andamento: <strong>{activeVisitors.length}</strong>
-          </div>
-          <div className="rounded-[18px] bg-muted px-3 py-2">
-            Portaria: <strong>{pendingApprovals.length}</strong>
-          </div>
-          <div className="rounded-[18px] bg-muted px-3 py-2">
-            Historico: <strong>{historyVisitors.length}</strong>
-          </div>
+        <div className="rounded-[18px] border border-border bg-card px-3 py-3 shadow-sm">
+          <p className="text-[11px] font-medium text-muted-foreground">
+            Pendentes
+          </p>
+          <p className="mt-1 text-xl font-bold leading-none text-foreground">
+            {pendingVisitors.length}
+          </p>
         </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {[
-            ["ONGOING", "Em andamento"],
-            ["PENDING_APPROVAL", "Portaria"],
-            ["HISTORY", "Historico"],
-            ["CANCELLED", "Cancelados"],
-            ["ALL", "Todos"],
-          ].map(([value, label]) => (
-            <Button
-              key={value}
-              variant={visitorFilter === value ? "accent" : "outline"}
-              className="rounded-full"
-              size="sm"
-              onClick={() => setVisitorFilter(value as VisitorListFilter)}
-            >
-              {label}
-            </Button>
-          ))}
+        <div className="rounded-[18px] border border-border bg-card px-3 py-3 shadow-sm">
+          <p className="text-[11px] font-medium text-muted-foreground">
+            Expirados
+          </p>
+          <p className="mt-1 text-xl font-bold leading-none text-foreground">
+            {expiredVisitors.length}
+          </p>
         </div>
       </div>
 
       <div className="space-y-3">
         {displayedVisitors.map((visitor, index) => {
           const config = statusConfig[visitor.status];
-          const canCancel =
-            canCreateVisitors &&
-            ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(visitor.status);
 
           return (
-            <motion.div
+            <motion.button
+              type="button"
               key={visitor.id}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.04 }}
-              className="rounded-[24px] border border-border bg-card p-4 shadow-sm"
+              className="w-full rounded-[24px] border border-border bg-card p-4 text-left shadow-sm transition-colors active:scale-[0.99] hover:bg-muted/30"
+              onClick={() => setSelectedVisitor(visitor)}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
@@ -518,115 +477,167 @@ const VisitorsPage = () => {
                     {formatVisitDate(visitor.visit_date)} - valido ate{" "}
                     {formatVisitDate(visitor.valid_until)}
                   </p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Tipo:{" "}
-                    {visitor.guest_person_type?.name ??
-                      visitor.current_registration?.person?.person_type?.name ??
-                      "Visitante"}
-                  </p>
                 </div>
                 <Badge variant={config.variant} className="gap-1.5">
                   <config.icon className="h-3 w-3" />
                   {config.label}
                 </Badge>
               </div>
-
-              {visitor.current_registration?.person ? (
-                <div className="mt-4 rounded-[20px] border border-border bg-muted/50 p-3 text-sm">
-                  <p className="font-semibold text-foreground">
-                    {visitor.current_registration.person.name}
-                  </p>
-                  <p className="text-muted-foreground">
-                    {visitor.current_registration.person.cpf}
-                  </p>
-                  <p className="mt-2 text-muted-foreground">
-                    Cadastro recebido. A aprovacao final acontece somente no PWA
-                    da portaria.
-                  </p>
-                </div>
-              ) : null}
-
-              <div className="mt-4 flex items-center justify-between rounded-[18px] bg-muted px-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                    Link do convite
-                  </p>
-                  <p className="mt-1 truncate text-xs text-muted-foreground">
-                    {visitor.public_link
-                      ? visitor.public_link.replace(/^https?:\/\//, "")
-                      : "Toque em compartilhar para gerar ou renovar o link."}
-                  </p>
-                </div>
-                <div className="ml-3 flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-full"
-                    disabled={
-                      rotateLinkMutation.isPending ||
-                      !canCreateVisitors ||
-                      visitor.status === "CANCELLED"
-                    }
-                    onClick={() => handleShare(visitor)}
-                  >
-                    <Share2 className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-full"
-                    disabled={
-                      rotateLinkMutation.isPending ||
-                      !canCreateVisitors ||
-                      visitor.status === "CANCELLED"
-                    }
-                    onClick={() => handleCopy(visitor)}
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-full"
-                    disabled={
-                      rotateLinkMutation.isPending ||
-                      !canCreateVisitors ||
-                      visitor.status === "CANCELLED"
-                    }
-                    onClick={() => rotateLinkMutation.mutate(visitor.id)}
-                  >
-                    {rotateLinkMutation.isPending ? (
-                      <RefreshCcw className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Link2 className="h-3.5 w-3.5" />
-                    )}
-                  </Button>
-                </div>
-              </div>
-
-              {canCancel ? (
-                <div className="mt-3 flex justify-end">
-                  <Button
-                    variant="outline"
-                    className="rounded-full"
-                    disabled={cancelVisitorMutation.isPending}
-                    onClick={() => cancelVisitorMutation.mutate(visitor.id)}
-                  >
-                    <XCircle className="h-4 w-4" />
-                    Cancelar convite
-                  </Button>
-                </div>
-              ) : null}
-            </motion.div>
+            </motion.button>
           );
         })}
 
         {displayedVisitors.length === 0 ? (
           <div className="rounded-[24px] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
-            Nenhum convite encontrado para o filtro atual.
+            Nenhum convite encontrado.
           </div>
         ) : null}
       </div>
+
+      <Dialog
+        open={Boolean(selectedVisitor)}
+        onOpenChange={(open) => !open && setSelectedVisitor(null)}
+      >
+        <DialogContent className="max-h-[88vh] w-[calc(100vw-2rem)] max-w-sm overflow-y-auto rounded-[28px] p-5">
+          {selectedVisitor && selectedVisitorConfig ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-left">
+                  {selectedVisitor.guest_name}
+                </DialogTitle>
+              </DialogHeader>
+
+              <div className="space-y-4 pt-1">
+                <div className="flex min-w-0 flex-col gap-3 rounded-[20px] bg-muted px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground">Status</p>
+                    <p className="mt-1 text-sm font-semibold text-foreground">
+                      {selectedVisitorConfig.label}
+                    </p>
+                  </div>
+                  <Badge
+                    variant={selectedVisitorConfig.variant}
+                    className="w-fit max-w-full shrink-0 gap-1.5 whitespace-normal"
+                  >
+                    <selectedVisitorConfig.icon className="h-3 w-3" />
+                    {selectedVisitorConfig.label}
+                  </Badge>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="rounded-[18px] border border-border px-3 py-3">
+                    <p className="text-xs text-muted-foreground">Visita</p>
+                    <p className="mt-1 break-words text-sm font-semibold text-foreground">
+                      {formatVisitDate(selectedVisitor.visit_date)}
+                    </p>
+                  </div>
+                  <div className="rounded-[18px] border border-border px-3 py-3">
+                    <p className="text-xs text-muted-foreground">Valido ate</p>
+                    <p className="mt-1 break-words text-sm font-semibold text-foreground">
+                      {formatVisitDate(selectedVisitor.valid_until)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-[18px] border border-border px-3 py-3">
+                  <p className="text-xs text-muted-foreground">Tipo</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {selectedVisitor.guest_person_type?.name ??
+                      selectedVisitor.current_registration?.person?.person_type?.name ??
+                      "Visitante"}
+                  </p>
+                </div>
+
+                {selectedVisitor.current_registration?.person ? (
+                  <div className="rounded-[20px] border border-border bg-muted/50 p-3 text-sm">
+                    <p className="font-semibold text-foreground">
+                      {selectedVisitor.current_registration.person.name}
+                    </p>
+                    <p className="text-muted-foreground">
+                      {selectedVisitor.current_registration.person.cpf}
+                    </p>
+                    <p className="mt-2 text-muted-foreground">
+                      Cadastro recebido. A aprovacao final acontece somente no PWA
+                      da portaria.
+                    </p>
+                  </div>
+                ) : null}
+
+                <div className="rounded-[18px] bg-muted px-3 py-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                    Link do convite
+                  </p>
+                  <p className="mt-1 break-all text-xs leading-relaxed text-muted-foreground">
+                    {selectedVisitor.public_link
+                      ? selectedVisitor.public_link.replace(/^https?:\/\//, "")
+                      : "Toque em compartilhar para gerar ou renovar o link."}
+                  </p>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="min-w-0 rounded-full"
+                      disabled={
+                        rotateLinkMutation.isPending ||
+                        !canRotateVisitorLinks ||
+                        selectedVisitor.status === "CANCELLED"
+                      }
+                      onClick={() => handleShare(selectedVisitor)}
+                    >
+                      <Share2 className="h-3.5 w-3.5" />
+                      Enviar
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="min-w-0 rounded-full"
+                      disabled={
+                        rotateLinkMutation.isPending ||
+                        !canRotateVisitorLinks ||
+                        selectedVisitor.status === "CANCELLED"
+                      }
+                      onClick={() => handleCopy(selectedVisitor)}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      Copiar
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="min-w-0 rounded-full"
+                      disabled={
+                        rotateLinkMutation.isPending ||
+                        !canRotateVisitorLinks ||
+                        selectedVisitor.status === "CANCELLED"
+                      }
+                      onClick={() => rotateLinkMutation.mutate(selectedVisitor.id)}
+                    >
+                      {rotateLinkMutation.isPending ? (
+                        <RefreshCcw className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Link2 className="h-3.5 w-3.5" />
+                      )}
+                      Link
+                    </Button>
+                  </div>
+                </div>
+
+                {selectedVisitorCanCancel ? (
+                  <Button
+                    variant="outline"
+                    className="w-full rounded-full"
+                    disabled={cancelVisitorMutation.isPending}
+                    onClick={() => cancelVisitorMutation.mutate(selectedVisitor.id)}
+                  >
+                    <XCircle className="h-4 w-4" />
+                    Cancelar convite
+                  </Button>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

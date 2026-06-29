@@ -21,10 +21,7 @@ import {
   type ResidentNotification,
 } from "@/features/notifications/resident-notifications";
 import { useResidentNotificationCenter } from "@/features/notifications/useResidentNotificationCenter";
-import {
-  INCIDENTS_MODULE_KEY,
-  sessionHasModule,
-} from "@/services/mobile-app.service";
+import { sessionHasCapability } from "@/services/mobile-app.service";
 
 function formatWhen(value: string) {
   return new Date(value).toLocaleString("pt-BR", {
@@ -78,7 +75,7 @@ const NotificationsPage = () => {
     unreadByModule,
     markAsRead,
   } = useResidentNotificationCenter();
-  const hasIncidentsModule = sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  const hasIncidentsModule = sessionHasCapability(snapshot, "incidents.view");
   const visibleNotifications = useMemo(
     () =>
       hasIncidentsModule

@@ -25,6 +25,7 @@ import {
   isProtectedDeliveryPhotoUrl,
   listDeliveries,
   normalizeApiBaseUrl,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 import type { DeliveryEntry, SessionSnapshot } from "@/services/mobile-app.types";
 
@@ -173,6 +174,8 @@ function DeliveryPhotoStrip({
 const DeliveriesPage = () => {
   const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
+  const canConfirmDelivery = sessionHasCapability(snapshot, "deliveries.confirm");
+  const canContestDelivery = sessionHasCapability(snapshot, "deliveries.contest");
   const [contestDrafts, setContestDrafts] = useState<Record<number, string>>({});
 
   const settingsQuery = useQuery({
@@ -352,6 +355,7 @@ const DeliveriesPage = () => {
                   Aguardando
                 </Badge>
               </div>
+              {canConfirmDelivery ? (
               <div className="mt-4 flex items-center justify-end">
                 <Button
                   variant="accent"
@@ -363,6 +367,7 @@ const DeliveriesPage = () => {
                   Confirmar retirada
                 </Button>
               </div>
+              ) : null}
             </motion.div>
           ))
         )}
@@ -412,8 +417,9 @@ const DeliveriesPage = () => {
                 </Badge>
               </div>
 
-              {delivery.can_contest ? (
+              {delivery.can_contest && (canConfirmDelivery || canContestDelivery) ? (
                 <div className="mt-4 space-y-3">
+                  {canContestDelivery ? (
                   <Textarea
                     rows={3}
                     placeholder="Se não recebeu esta encomenda, descreva o motivo da contestação."
@@ -425,7 +431,9 @@ const DeliveriesPage = () => {
                       }))
                     }
                   />
+                  ) : null}
                   <div className="flex flex-wrap gap-2">
+                    {canConfirmDelivery ? (
                     <Button
                       variant="accent"
                       className="rounded-full"
@@ -434,6 +442,8 @@ const DeliveriesPage = () => {
                     >
                       Confirmar recebimento
                     </Button>
+                    ) : null}
+                    {canContestDelivery ? (
                     <Button
                       variant="outline"
                       className="rounded-full"
@@ -451,6 +461,7 @@ const DeliveriesPage = () => {
                       <AlertTriangle className="mr-2 h-4 w-4" />
                       Contestar entrega
                     </Button>
+                    ) : null}
                   </div>
                 </div>
               ) : (

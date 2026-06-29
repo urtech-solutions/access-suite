@@ -282,3 +282,38 @@ O checklist consolidado de QA, smoke, rollback e pendencias operacionais desta f
 - `Capacitor` + stores
 - recursos nativos de camera, biometria e notificacoes
 - observabilidade mobile e analytics operacional
+
+# Visoes Access Suite
+
+O Access Suite consome a autorizacao funcional pelo campo
+`user.access_suite`, retornado pelos contratos de login, reidratacao e troca de
+contexto do AccessOS. `user.modules` continua existindo por compatibilidade,
+mas ja vem filtrado pela permissao efetiva da pessoa.
+
+As telas devem usar `sessionHasCapability(snapshot, capability)` para tabs,
+cards, botoes e bloqueio de rota direta. `sessionHasModule` permanece apenas
+como fallback para sessoes antigas. Contextos `APP_USER OWNER` continuam no
+fluxo somente leitura de Inicio e Perfil.
+
+Tipos de pessoa sao tratados como tags da pessoa. A autorizacao do app e
+definida no Management em `/peoples/access-suite-views`, por site, vinculando
+visoes reutilizaveis aos tipos ativos.
+
+Catalogo de capacidades esperado pelo app:
+
+- basico: `home.view`, `profile.view`, `notifications.view`;
+- visitantes: `visitors.view`, `visitors.create`, `visitors.cancel`,
+  `visitors.rotate_link`;
+- areas comuns: `common_areas.view`;
+- reservas: `reservations.view`, `reservations.create`,
+  `reservations.cancel`, `reservations.update_headcount`,
+  `reservations.rotate_link`;
+- entregas: `deliveries.view`, `deliveries.confirm`, `deliveries.contest`;
+- mural: `bulletin.view`, `bulletin.create`;
+- incidentes: `incidents.view`, `incidents.create`, `incidents.comment`;
+- chat: `chat.view`, `chat.send`, `chat.direct_message`, `chat.portaria`.
+
+Quando uma capacidade nao existir, a UI deve esconder a acao correspondente e
+bloquear rota direta com a tela de sem acesso. O backend continua sendo a
+barreira final e deve retornar `403` quando o modulo estiver habilitado, mas a
+visao efetiva da pessoa nao permitir a acao.

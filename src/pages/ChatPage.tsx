@@ -34,12 +34,11 @@ import { useChatCalls } from "@/features/chat-calls/useChatCalls";
 import { useSession } from "@/features/session/SessionProvider";
 import { PageHeader } from "@/features/shared/PageHeader";
 import {
-  CHAT_MODULE_KEY,
   downloadChatAttachment,
   listChatPortariaMessages,
   markChatConversationRead,
   sendPortariaChatMessage,
-  sessionHasModule,
+  sessionHasCapability,
 } from "@/services/mobile-app.service";
 import type {
   ChatAttachment,
@@ -501,7 +500,10 @@ export default function ChatPage() {
   const lastReadMarkerRef = useRef("");
   const residentNameRef = useRef("");
   const { resident, snapshot, connectionState, isAuthenticated } = useSession();
-  const hasChatModule = sessionHasModule(snapshot, CHAT_MODULE_KEY);
+  const hasChatModule = sessionHasCapability(snapshot, "chat.view");
+  const canSendChat = sessionHasCapability(snapshot, "chat.send");
+  const canDirectMessage = sessionHasCapability(snapshot, "chat.direct_message");
+  const canUsePortaria = sessionHasCapability(snapshot, "chat.portaria");
   const {
     socketStatus: callSocketStatus,
     startPortariaCall,
@@ -533,7 +535,8 @@ export default function ChatPage() {
   const currentPersonId = resident.person_id ?? resident.id;
   const socketReady = socketStatus === "ready" && Boolean(socketRef.current?.connected);
   const portariaTarget = createPortariaTarget(resident.site_id, resident.site_name);
-  const showPortariaOption = !search.trim() || isPortariaSearch(search);
+  const showPortariaOption =
+    canUsePortaria && (!search.trim() || isPortariaSearch(search));
 
   useEffect(() => {
     selectedTargetRef.current = selectedTarget;
@@ -692,6 +695,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (
       !hasChatModule ||
+      !canDirectMessage ||
       !socketReady ||
       !socketRef.current ||
       isPortariaSearch(search)
@@ -735,7 +739,7 @@ export default function ChatPage() {
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [hasChatModule, search, socketReady]);
+  }, [canDirectMessage, hasChatModule, search, socketReady]);
 
   useEffect(() => {
     if (!hasChatModule || !selectedTarget) {
@@ -770,7 +774,14 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [hasChatModule, selectedTarget, socketReady]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    canDirectMessage,
+    canUsePortaria,
+    hasChatModule,
+    selectedTarget,
+    socketReady,
+  ]);
 
   useEffect(() => {
     if (!selectedTarget || historyLoading || !history.conversation) return;
@@ -853,6 +864,10 @@ export default function ChatPage() {
 
   async function loadTargetHistory(target: ChatTarget): Promise<HistoryState> {
     if (target.type === "PERSON") {
+      if (!canDirectMessage) {
+        throw new Error("Sua visao nao permite conversas diretas.");
+      }
+
       if (!socketReady || !socketRef.current) {
         throw new Error("Chat em tempo real ainda não está conectado.");
       }
@@ -876,6 +891,10 @@ export default function ChatPage() {
           mapMessage(message, residentNameRef.current),
         ),
       };
+    }
+
+    if (!canUsePortaria) {
+      throw new Error("Sua visao nao permite chat com a portaria.");
     }
 
     if (socketReady && socketRef.current) {
@@ -935,6 +954,21 @@ export default function ChatPage() {
 
     if (!selectedTarget) {
       toast.error("Selecione um destino do chat.");
+      return;
+    }
+
+    if (!canSendChat) {
+      toast.error("Sua visao nao permite enviar mensagens.");
+      return;
+    }
+
+    if (selectedTarget.type === "PERSON" && !canDirectMessage) {
+      toast.error("Sua visao nao permite conversas diretas.");
+      return;
+    }
+
+    if (selectedTarget.type === "PORTARIA" && !canUsePortaria) {
+      toast.error("Sua visao nao permite chat com a portaria.");
       return;
     }
 
@@ -1133,7 +1167,10 @@ export default function ChatPage() {
   }
 
   if (selectedTarget) {
-    const canReply = history.conversation?.can_reply ?? true;
+    const canReply =
+      (history.conversation?.can_reply ?? true) &&
+      canSendChat &&
+      (selectedTarget.type === "PERSON" ? canDirectMessage : canUsePortaria);
     const targetName = getTargetName(selectedTarget);
     const targetSiteName = getTargetSiteName(selectedTarget);
 

@@ -2,6 +2,8 @@ import { DEFAULT_API_BASE_URL } from "@/config/env";
 import { getResidentDeviceInfo } from "@/services/device-info";
 import { readStorage, removeStorage, writeStorage } from "@/services/storage";
 import type {
+  AccessSuiteCapability,
+  AccessSuiteEffectiveAccess,
   AccessOsInvite,
   BulletinPost,
   BulletinModuleStatus,
@@ -67,6 +69,19 @@ const PRIVATE_HTTP_HOST_PATTERN =
   /^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})$/;
 const DISABLED_RESIDENT_APP_REQUEST_MODULES = new Set([FINANCEIRO_MODULE_KEY]);
 const BULLETIN_TAGS = new Set<BulletinTag>(["URGENTE", "NOTIFICACAO", "AVISO"]);
+const BASIC_ACCESS_SUITE_CAPABILITIES: AccessSuiteCapability[] = [
+  "home.view",
+  "profile.view",
+  "notifications.view",
+];
+const MODULE_VIEW_CAPABILITIES: Record<string, AccessSuiteCapability[]> = {
+  [BULLETIN_MODULE_KEY]: ["bulletin.view"],
+  [CHAT_MODULE_KEY]: ["chat.view"],
+  [COMMON_AREAS_MODULE_KEY]: ["common_areas.view", "reservations.view"],
+  [DELIVERIES_MODULE_KEY]: ["deliveries.view"],
+  [INCIDENTS_MODULE_KEY]: ["incidents.view"],
+  [VISITORS_MODULE_KEY]: ["visitors.view"],
+};
 
 export function isResidentAppModuleRequestDisabled(moduleKey: string) {
   return DISABLED_RESIDENT_APP_REQUEST_MODULES.has(
@@ -683,14 +698,57 @@ function normalizeSessionModules(modules?: unknown) {
   );
 }
 
+function normalizeAccessSuiteCapabilities(capabilities?: unknown) {
+  const values = Array.isArray(capabilities) ? capabilities : [];
+  return Array.from(
+    new Set(
+      [...BASIC_ACCESS_SUITE_CAPABILITIES, ...values]
+        .map((capability) =>
+          String(capability ?? "").trim(),
+        )
+        .filter(Boolean),
+    ),
+  ) as AccessSuiteCapability[];
+}
+
+function normalizeAccessSuite(
+  user: ResidentAppUser,
+): AccessSuiteEffectiveAccess {
+  const rawAccessSuite = user.access_suite;
+  const modules = normalizeSessionModules(rawAccessSuite?.modules ?? user.modules);
+  const capabilities = normalizeAccessSuiteCapabilities(
+    rawAccessSuite?.capabilities,
+  );
+
+  if (!rawAccessSuite?.capabilities?.length) {
+    for (const module of modules) {
+      for (const capability of MODULE_VIEW_CAPABILITIES[module] ?? []) {
+        capabilities.push(capability);
+      }
+    }
+  }
+
+  return {
+    capabilities: Array.from(new Set(capabilities)).sort(),
+    modules,
+    views: Array.isArray(rawAccessSuite?.views) ? rawAccessSuite.views : [],
+  };
+}
+
 function normalizeResidentAppUser(user?: ResidentAppUser | null) {
   if (!user) {
     return null;
   }
 
-  return {
+  const modules = normalizeSessionModules(user.modules);
+  const normalizedUser = {
     ...user,
-    modules: normalizeSessionModules(user.modules),
+    modules,
+  };
+
+  return {
+    ...normalizedUser,
+    access_suite: normalizeAccessSuite(normalizedUser),
   };
 }
 
@@ -711,8 +769,36 @@ export function sessionHasModule(
   );
 }
 
+export function sessionHasCapability(
+  snapshot: Pick<SessionSnapshot, "mode" | "user">,
+  capability: AccessSuiteCapability,
+) {
+  if (snapshot.mode === "preview") {
+    return true;
+  }
+
+  const normalizedCapability = String(capability ?? "").trim();
+  if (!normalizedCapability) {
+    return false;
+  }
+
+  if (
+    snapshot.user?.access_suite?.capabilities?.some(
+      (entry) => String(entry).trim() === normalizedCapability,
+    )
+  ) {
+    return true;
+  }
+
+  const fallbackModule = Object.entries(MODULE_VIEW_CAPABILITIES).find(
+    ([, capabilities]) => capabilities.includes(capability),
+  )?.[0];
+
+  return fallbackModule ? sessionHasModule(snapshot, fallbackModule) : false;
+}
+
 function hasIncidentsModule(snapshot: Pick<SessionSnapshot, "mode" | "user">) {
-  return sessionHasModule(snapshot, INCIDENTS_MODULE_KEY);
+  return sessionHasCapability(snapshot, "incidents.view");
 }
 
 function assertIncidentsModule(
@@ -2746,7 +2832,7 @@ export async function listBulletin(
   const apiSiteId = siteId && siteId > 0 ? siteId : undefined;
   const cacheName = bulletinCacheKey(apiSiteId ?? siteId);
 
-  if (!sessionHasModule(snapshot, BULLETIN_MODULE_KEY)) {
+  if (!sessionHasCapability(snapshot, "bulletin.view")) {
     return [];
   }
 
@@ -2791,7 +2877,7 @@ export async function getBulletinModuleStatus(
   const fallback: BulletinModuleStatus = {
     enabled:
       snapshot.mode === "preview" ||
-      sessionHasModule(snapshot, BULLETIN_MODULE_KEY),
+      sessionHasCapability(snapshot, "bulletin.view"),
     module: BULLETIN_MODULE_KEY,
     site_id: siteId ?? null,
     tenant_uuid: tenantUuid,
@@ -2802,7 +2888,7 @@ export async function getBulletinModuleStatus(
     return readResidentScopedFallback(cacheName, fallback);
   }
 
-  if (!sessionHasModule(snapshot, BULLETIN_MODULE_KEY)) {
+  if (!sessionHasCapability(snapshot, "bulletin.view")) {
     return { ...fallback, enabled: false };
   }
 
@@ -2838,7 +2924,7 @@ export async function createBulletin(
     );
   }
 
-  if (!sessionHasModule(snapshot, BULLETIN_MODULE_KEY)) {
+  if (!sessionHasCapability(snapshot, "bulletin.create")) {
     throw new Error("O módulo de mural não está habilitado para este usuário.");
   }
 

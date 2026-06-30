@@ -1192,9 +1192,9 @@ function decodeAccessOsTokenPayload(token?: string | null) {
 }
 
 export function hasAccessOsTokenActiveContext(snapshot: SessionSnapshot) {
-  const activeContext = decodeAccessOsTokenPayload(
-    snapshot.token,
-  )?.active_context;
+  const activeContext =
+    decodeAccessOsTokenPayload(snapshot.token)?.active_context ??
+    snapshot.residentAuth?.active_context;
 
   return Boolean(
     activeContext &&

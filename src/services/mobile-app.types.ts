@@ -16,8 +16,6 @@ export type AccessSuiteCapability =
   | "notifications.view"
   | "visitors.view"
   | "visitors.create"
-  | "visitors.cancel"
-  | "visitors.rotate_link"
   | "common_areas.view"
   | "reservations.view"
   | "reservations.create"
@@ -28,10 +26,8 @@ export type AccessSuiteCapability =
   | "deliveries.confirm"
   | "deliveries.contest"
   | "bulletin.view"
-  | "bulletin.create"
   | "incidents.view"
   | "incidents.create"
-  | "incidents.comment"
   | "chat.view"
   | "chat.send"
   | "chat.direct_message"
@@ -343,6 +339,9 @@ export interface VisitorInviteRule {
   guest_person_type_id: number;
   access_profile_id: number;
   enabled: boolean;
+  host_person_type_name?: string | null;
+  guest_person_type_name?: string | null;
+  access_profile_name?: string | null;
   host_person_type?: {
     id: number;
     name: string;
@@ -509,16 +508,6 @@ export interface BulletinModuleStatus {
   module: "BULLETIN" | string;
   site_id?: number | null;
   tenant_uuid: string;
-}
-
-export interface CreateBulletinInput {
-  site_id?: number;
-  title: string;
-  content: string;
-  tag?: BulletinTag;
-  pinned?: boolean;
-  expires_at?: string;
-  image?: File | null;
 }
 
 export interface CommonArea {

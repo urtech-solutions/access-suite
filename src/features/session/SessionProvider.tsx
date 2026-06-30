@@ -14,6 +14,7 @@ import {
   hydrateBackendSession,
   isBackendAuthenticated,
   loadBackendResidents,
+  logoutBackendCookieSession,
   acceptAccessOsInvite,
   readSessionSnapshot,
   registerAccessOsAccount,
@@ -48,7 +49,7 @@ type SessionContextValue = {
   ) => Promise<SessionSnapshot>;
   activateBackendSession: (next: SessionSnapshot) => Promise<void>;
   acceptAccessOsInvite: (token: string) => Promise<SessionSnapshot>;
-  disconnectBackend: () => void;
+  disconnectBackend: () => Promise<void>;
   refreshResidents: () => Promise<void>;
   refreshSession: () => Promise<void>;
 };
@@ -218,8 +219,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         await activateBackendSession(next);
       }
       return next;
-    } catch (error) {
-      throw error;
     } finally {
       setIsConnecting(false);
     }
@@ -245,17 +244,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  function disconnectBackend() {
+  async function disconnectBackend() {
     const endpoint = readStoredPushEndpoint();
     if (endpoint && snapshot.mode === "backend") {
       void unregisterResidentPushSubscription(snapshot, endpoint).catch(
         () => undefined,
       );
     }
+    if (snapshot.mode === "backend") {
+      await logoutBackendCookieSession(snapshot).catch(() => undefined);
+    }
     clearStoredPushRegistration();
     const next = buildLoggedOutBackendSnapshot();
     setSnapshot(next);
-    saveSessionSnapshot(next);
+    disconnectBackendSession();
     setResidents([]);
     setIsHydratingSession(false);
   }

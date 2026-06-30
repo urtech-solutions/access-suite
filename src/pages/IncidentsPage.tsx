@@ -242,7 +242,7 @@ function IncidentsContent() {
     snapshot,
     "incidents.create",
   );
-  const canCommentIncident = sessionHasCapability(snapshot, "incidents.comment");
+  const canCommentIncident = canCreateIncidentCapability;
   const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null);
   const [topicFilter, setTopicFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | IncidentStatus>("all");

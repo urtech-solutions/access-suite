@@ -21,7 +21,6 @@ import type {
   AccessOsResetPasswordResponse,
   AccessOsValidateResetCodeInput,
   AccessOsValidateResetCodeResponse,
-  CreateBulletinInput,
   CreateIncidentInput,
   CreateReservationInput,
   CreateVisitorInput,
@@ -55,6 +54,17 @@ import type {
 const SESSION_KEY = "sv-mobile:session";
 const PREVIEW_STATE_KEY = "sv-mobile:preview-state";
 const CACHE_PREFIX = "sv-mobile:cache:";
+const AUTH_CONTEXT_SELECTION_KEY = "sv-mobile:pending-auth-context-selection";
+const CSRF_HEADER = "X-CSRF-Token";
+const CSRF_TOKEN_COOKIE_NAMES = ["csrf_token_pwa", "csrf_token"];
+const LEGACY_AUTH_STORAGE_KEYS = [
+  "access_token",
+  "refresh_token",
+  "accessToken",
+  "refreshToken",
+  "authToken",
+  "token",
+];
 export const INCIDENTS_MODULE_KEY = "INCIDENTS";
 export const BULLETIN_MODULE_KEY = "BULLETIN";
 export const CHAT_MODULE_KEY = "CHAT";
@@ -346,6 +356,61 @@ function isApiStatusError(error: unknown, status: number) {
   return error instanceof ApiRequestError && error.status === status;
 }
 
+function requiresCsrfHeader(method?: string) {
+  return !["GET", "HEAD", "OPTIONS"].includes(
+    String(method ?? "GET").trim().toUpperCase(),
+  );
+}
+
+function readCookie(name: string) {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const encodedName = `${encodeURIComponent(name)}=`;
+  const cookie = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(encodedName));
+
+  if (!cookie) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(cookie.slice(encodedName.length));
+  } catch {
+    return cookie.slice(encodedName.length);
+  }
+}
+
+function readCsrfToken() {
+  for (const cookieName of CSRF_TOKEN_COOKIE_NAMES) {
+    const token = readCookie(cookieName);
+    if (token) {
+      return token;
+    }
+  }
+
+  return null;
+}
+
+function buildRequestHeaders(options: {
+  token?: string | null;
+  method?: string;
+  contentType?: string;
+}) {
+  const csrfToken = requiresCsrfHeader(options.method)
+    ? readCsrfToken()
+    : null;
+
+  return {
+    ...(options.contentType ? { "Content-Type": options.contentType } : {}),
+    ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+    ...(csrfToken ? { [CSRF_HEADER]: csrfToken } : {}),
+  };
+}
+
 async function requestJson<T>(
   path: string,
   options: {
@@ -361,15 +426,17 @@ async function requestJson<T>(
 
   const resolvedBaseUrl = normalizeApiBaseUrl(options.baseUrl);
   const endpoint = `${resolvedBaseUrl}${path}`;
+  const method = options.method ?? "GET";
   let response: Response;
 
   try {
     response = await fetch(endpoint, {
-      method: options.method ?? "GET",
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
-      },
+      method,
+      headers: buildRequestHeaders({
+        method,
+        token: options.token,
+        contentType: "application/json",
+      }),
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
   } catch {
@@ -409,14 +476,16 @@ async function requestForm<T>(
 
   const resolvedBaseUrl = normalizeApiBaseUrl(options.baseUrl);
   const endpoint = `${resolvedBaseUrl}${path}`;
+  const method = options.method ?? "POST";
   let response: Response;
 
   try {
     response = await fetch(endpoint, {
-      method: options.method ?? "POST",
-      headers: {
-        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
-      },
+      method,
+      headers: buildRequestHeaders({
+        method,
+        token: options.token,
+      }),
       body: options.formData,
     });
   } catch {
@@ -521,50 +590,6 @@ function readResidentVisitorsFallback(resident: ResidentProfile) {
   return attachVisitorLinks(
     readResidentScopedFallback(`visitors:${resident.id}`, [] as VisitorEntry[]),
   );
-}
-
-function updateVisitorLocally(
-  resident: ResidentProfile,
-  visitorId: number,
-  updater: (visitor: VisitorEntry) => VisitorEntry,
-) {
-  let updatedFromPreview: VisitorEntry | null = null;
-  const nextPreview = upsertPreviewState("visitors", (visitors) =>
-    visitors.map((visitor) => {
-      if (visitor.id !== visitorId) {
-        return visitor;
-      }
-
-      updatedFromPreview = updater(visitor);
-      return updatedFromPreview;
-    }),
-  );
-  const previewScoped = nextPreview.filter(
-    (visitor) => visitor.host?.id === resident.id,
-  );
-
-  let updatedFromCache: VisitorEntry | null = null;
-  const currentCache = readCache<VisitorEntry[]>(
-    `visitors:${resident.id}`,
-    [] as VisitorEntry[],
-  );
-  const nextCache = currentCache.map((visitor) => {
-    if (visitor.id !== visitorId) {
-      return visitor;
-    }
-
-    updatedFromCache = updater(visitor);
-    return updatedFromCache;
-  });
-  writeCache(
-    `visitors:${resident.id}`,
-    currentCache.some((visitor) => visitor.id === visitorId)
-      ? nextCache
-      : currentCache,
-  );
-
-  const updated = updatedFromCache ?? updatedFromPreview;
-  return updated ? attachVisitorLinks([updated])[0] : null;
 }
 
 function readResidentReservationsFallback(resident: ResidentProfile) {
@@ -1040,6 +1065,37 @@ export function resetSessionSnapshot() {
   removeStorage(SESSION_KEY);
 }
 
+export async function logoutBackendCookieSession(snapshot: SessionSnapshot) {
+  const endpoint = `${normalizeApiBaseUrl(snapshot.apiBaseUrl)}/auth/logout`;
+  await fetch(endpoint, {
+    method: "POST",
+    credentials: "include",
+    headers: buildRequestHeaders({
+      method: "POST",
+      token: snapshot.token,
+    }),
+  });
+}
+
+export function clearPersistedAccessOsSession() {
+  removeStorage(SESSION_KEY);
+  removeStorage(PREVIEW_STATE_KEY);
+
+  for (const key of LEGACY_AUTH_STORAGE_KEYS) {
+    localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
+  }
+
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith(CACHE_PREFIX)) {
+      localStorage.removeItem(key);
+    }
+  }
+
+  sessionStorage.removeItem(AUTH_CONTEXT_SELECTION_KEY);
+}
+
 function readPreviewState() {
   return readStorage<PreviewState>(PREVIEW_STATE_KEY, {
     residents: [],
@@ -1458,8 +1514,7 @@ export async function loadBackendResidents(snapshot: SessionSnapshot) {
 }
 
 export function disconnectBackendSession() {
-  const fallback = getDefaultSessionSnapshot();
-  saveSessionSnapshot({ ...fallback, mode: "backend" });
+  clearPersistedAccessOsSession();
 }
 
 export async function getVisitorSettings(
@@ -1535,7 +1590,7 @@ export async function createVisitor(
   resident: ResidentProfile,
   input: CreateVisitorInput,
 ) {
-  ensureResidentWriteAccess(resident, "A criação de convites");
+  ensureResidentWriteAccess(resident, "A criacao de convites");
   const requestsDisabled =
     isResidentAppModuleRequestDisabled(VISITORS_MODULE_KEY);
 
@@ -1585,7 +1640,7 @@ export async function createVisitor(
     status: "PENDING",
     notes: input.notes ?? null,
     host: { id: resident.id, name: resident.name },
-    profile: { id: 1, name: "Visitante Diário", color: "#D97706" },
+    profile: { id: 1, name: "Visitante Diario", color: "#D97706" },
   };
 
   const next = upsertPreviewState("visitors", (visitors) => [
@@ -1600,22 +1655,38 @@ export async function createVisitor(
   return localVisitor;
 }
 
-export async function rotateVisitorLink(
+export async function cancelVisitor(
   snapshot: SessionSnapshot,
   connectionState: ConnectionState,
   resident: ResidentProfile,
   visitorId: number,
 ) {
-  ensureResidentWriteAccess(resident, "A rotação de links de convites");
+  ensureResidentWriteAccess(resident, "O cancelamento de convites");
 
-  if (!isOnlineBackend(snapshot, connectionState)) {
-    throw new Error(
-      "A rotação do link do convite exige conexão com o backend.",
+  if (
+    snapshot.mode === "preview" ||
+    isResidentAppModuleRequestDisabled(VISITORS_MODULE_KEY)
+  ) {
+    const currentCache = readCache<VisitorEntry[]>(
+      `visitors:${resident.id}`,
+      [],
     );
+    const nextCache = currentCache.map((visitor) =>
+      visitor.id === visitorId
+        ? { ...visitor, status: "CANCELLED" as const, invitation_status: "CANCELLED" }
+        : visitor,
+    );
+    writeCache(`visitors:${resident.id}`, nextCache);
+    const updated = nextCache.find((visitor) => visitor.id === visitorId);
+    return updated ? attachVisitorLinks([updated])[0] : null;
   }
 
-  const rotated = await requestJson<VisitorEntry>(
-    `/resident-app/visitors/${visitorId}/rotate-link`,
+  if (!isOnlineBackend(snapshot, connectionState)) {
+    throw new Error("O cancelamento do convite exige conexao com o backend.");
+  }
+
+  const updated = await requestJson<VisitorEntry>(
+    `/resident-app/visitors/${visitorId}/cancel`,
     {
       baseUrl: snapshot.apiBaseUrl,
       token: snapshot.token,
@@ -1623,14 +1694,15 @@ export async function rotateVisitorLink(
     },
   );
 
-  if (rotated.public_link) {
-    writeVisitorLink(rotated.id, rotated.public_link);
-  }
-
-  return {
-    ...rotated,
-    public_link: rotated.public_link ?? readVisitorLink(rotated.id),
+  const hydrated = {
+    ...updated,
+    public_link: updated.public_link ?? readVisitorLink(updated.id),
   };
+  const next = readCache<VisitorEntry[]>(`visitors:${resident.id}`, []).map(
+    (visitor) => (visitor.id === hydrated.id ? hydrated : visitor),
+  );
+  writeCache(`visitors:${resident.id}`, next);
+  return hydrated;
 }
 
 async function resolveVisitorDecision(
@@ -1687,49 +1759,6 @@ export async function rejectVisitor(
     visitorId,
     "reject",
   );
-}
-
-export async function cancelVisitor(
-  snapshot: SessionSnapshot,
-  connectionState: ConnectionState,
-  resident: ResidentProfile,
-  visitorId: number,
-) {
-  ensureResidentWriteAccess(resident, "O cancelamento de convites");
-
-  if (
-    snapshot.mode === "preview" ||
-    isResidentAppModuleRequestDisabled(VISITORS_MODULE_KEY)
-  ) {
-    return updateVisitorLocally(resident, visitorId, (visitor) => ({
-      ...visitor,
-      status: "CANCELLED",
-      invitation_status: "CANCELLED",
-    }));
-  }
-
-  if (!isOnlineBackend(snapshot, connectionState)) {
-    throw new Error("O cancelamento do convite exige conexão com o backend.");
-  }
-
-  const updated = await requestJson<VisitorEntry>(
-    `/resident-app/visitors/${visitorId}/cancel`,
-    {
-      baseUrl: snapshot.apiBaseUrl,
-      token: snapshot.token,
-      method: "POST",
-    },
-  );
-
-  const hydrated = {
-    ...updated,
-    public_link: updated.public_link ?? readVisitorLink(updated.id),
-  };
-  const next = readCache<VisitorEntry[]>(`visitors:${resident.id}`, []).map(
-    (visitor) => (visitor.id === hydrated.id ? hydrated : visitor),
-  );
-  writeCache(`visitors:${resident.id}`, next);
-  return hydrated;
 }
 
 const previewIncidentTopicLibrary = [
@@ -2911,54 +2940,6 @@ export async function getBulletinModuleStatus(
 
     return readResidentScopedFallback(cacheName, fallback);
   }
-}
-
-export async function createBulletin(
-  snapshot: SessionSnapshot,
-  connectionState: ConnectionState,
-  input: CreateBulletinInput,
-) {
-  if (!isOnlineBackend(snapshot, connectionState)) {
-    throw new Error(
-      "A publicação de comunicados só está disponível com conexão ao backend central.",
-    );
-  }
-
-  if (!sessionHasCapability(snapshot, "bulletin.create")) {
-    throw new Error("O módulo de mural não está habilitado para este usuário.");
-  }
-
-  const siteId = input.site_id ?? snapshot.resident?.site_id;
-  if (!siteId || siteId <= 0) {
-    throw new Error("Selecione um site ativo para publicar no mural.");
-  }
-
-  const form = new FormData();
-  form.append("site_id", String(siteId));
-  form.append("title", input.title.trim());
-  form.append("content", input.content.trim());
-  form.append("tag", input.tag ?? "AVISO");
-  if (input.pinned !== undefined) {
-    form.append("pinned", input.pinned ? "true" : "false");
-  }
-  if (input.expires_at) {
-    form.append("expires_at", input.expires_at);
-  }
-  if (input.image) {
-    form.append("image", input.image, input.image.name || "bulletin.jpg");
-  }
-
-  const created = await requestForm<BulletinPost>("/bulletin", {
-    baseUrl: snapshot.apiBaseUrl,
-    token: snapshot.token,
-    formData: form,
-  });
-
-  const normalized = normalizeBulletinPost(created);
-
-  const current = readCache<BulletinPost[]>(bulletinCacheKey(siteId), []);
-  writeCache(bulletinCacheKey(siteId), [normalized, ...current]);
-  return normalized;
 }
 
 export async function listCommonAreas(

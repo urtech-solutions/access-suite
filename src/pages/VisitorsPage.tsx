@@ -2,9 +2,7 @@ import { useState } from "react";
 import {
   Clock3,
   Copy,
-  Link2,
   Plus,
-  RefreshCcw,
   Share2,
   ShieldAlert,
   UserCheck,
@@ -39,10 +37,9 @@ import {
   createVisitor,
   getVisitorSettings,
   listVisitors,
-  rotateVisitorLink,
   sessionHasCapability,
 } from "@/services/mobile-app.service";
-import type { VisitorEntry } from "@/services/mobile-app.types";
+import type { VisitorEntry, VisitorInviteRule } from "@/services/mobile-app.types";
 
 const statusConfig = {
   PENDING: { label: "Aguardando cadastro", variant: "warning" as const, icon: Clock3 },
@@ -82,17 +79,20 @@ function rangeInDays(startDate: string, endDate: string) {
   );
 }
 
+function getGuestTypeLabel(rule: VisitorInviteRule) {
+  return (
+    rule.guest_person_type?.name?.trim() ||
+    rule.guest_person_type_name?.trim() ||
+    `Tipo ${rule.guest_person_type_id}`
+  );
+}
+
 const VisitorsPage = () => {
   const queryClient = useQueryClient();
   const { resident, snapshot, connectionState } = useSession();
   const canCreateVisitors =
     resident.role !== "SINDICO" &&
     sessionHasCapability(snapshot, "visitors.create");
-  const canCancelVisitors = sessionHasCapability(snapshot, "visitors.cancel");
-  const canRotateVisitorLinks = sessionHasCapability(
-    snapshot,
-    "visitors.rotate_link",
-  );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [selectedGuestTypeId, setSelectedGuestTypeId] = useState("");
@@ -112,16 +112,6 @@ const VisitorsPage = () => {
     queryFn: () => listVisitors(snapshot, connectionState, resident),
   });
 
-  const saveVisitorLocally = (updated: VisitorEntry) => {
-    queryClient.setQueryData<VisitorEntry[]>(
-      ["visitors", resident.id, snapshot.mode, connectionState],
-      (current = []) =>
-        current.map((visitor) =>
-          visitor.id === updated.id ? { ...visitor, ...updated } : visitor,
-        ),
-    );
-  };
-
   const settings = settingsQuery.data;
   const allowedGuestRules = settings?.allowed_guest_rules ?? [];
   const canUseSingleRule = allowedGuestRules.length === 1;
@@ -129,8 +119,15 @@ const VisitorsPage = () => {
     allowedGuestRules.find(
       (rule) => String(rule.guest_person_type_id) === selectedGuestTypeId,
     ) ?? (canUseSingleRule ? allowedGuestRules[0] : null);
-  const canCreateByRule =
-    settings?.enabled !== false && allowedGuestRules.length > 0;
+  const createInviteDisabledReason = settingsQuery.isLoading
+    ? "Carregando configuracoes de visitantes."
+    : settings?.allow_resident_creation === false
+      ? "Criacao de convites por moradores esta desativada para este site."
+      : settings?.enabled === false
+        ? "Modulo de visitantes esta desativado para este site."
+        : allowedGuestRules.length === 0
+          ? "Seu tipo de pessoa nao possui regra de visitante permitida neste site."
+          : null;
 
   const createVisitorMutation = useMutation({
     mutationFn: async () => {
@@ -161,21 +158,12 @@ const VisitorsPage = () => {
     },
   });
 
-  const rotateLinkMutation = useMutation({
-    mutationFn: async (visitorId: number) =>
-      rotateVisitorLink(snapshot, connectionState, resident, visitorId),
-    onSuccess: (updated) => {
-      saveVisitorLocally(updated);
-      queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
-    },
-  });
-
   const cancelVisitorMutation = useMutation({
     mutationFn: async (visitorId: number) =>
       cancelVisitor(snapshot, connectionState, resident, visitorId),
     onSuccess: (updated) => {
       if (updated) {
-        saveVisitorLocally(updated);
+        setSelectedVisitor(updated);
       }
       toast.success("Convite cancelado.");
       queryClient.invalidateQueries({ queryKey: ["visitors", resident.id] });
@@ -205,18 +193,13 @@ const VisitorsPage = () => {
     return `Convite de visitante para ${visitor.guest_name}`;
   }
 
-  async function ensureVisitorLink(visitor: VisitorEntry) {
-    if (visitor.public_link) {
-      return visitor;
-    }
-
-    return rotateLinkMutation.mutateAsync(visitor.id);
-  }
-
   async function handleCopy(visitor: VisitorEntry) {
     try {
-      const invitation = await ensureVisitorLink(visitor);
-      const copied = await copyTextSafely(buildShareText(invitation));
+      if (!visitor.public_link) {
+        toast.error("Este convite ainda nao possui link publico.");
+        return;
+      }
+      const copied = await copyTextSafely(buildShareText(visitor));
       toast.success(
         copied ? "Link do convite copiado." : "Link pronto para copia manual.",
       );
@@ -231,13 +214,16 @@ const VisitorsPage = () => {
 
   async function handleShare(visitor: VisitorEntry) {
     try {
-      const invitation = await ensureVisitorLink(visitor);
-      const shareText = buildShareText(invitation);
+      if (!visitor.public_link) {
+        toast.error("Este convite ainda nao possui link publico.");
+        return;
+      }
+      const shareText = buildShareText(visitor);
 
       if (navigator.share) {
         await navigator.share({
           text: shareText,
-          url: invitation.public_link ?? undefined,
+          url: visitor.public_link,
         });
         return;
       }
@@ -283,7 +269,7 @@ const VisitorsPage = () => {
     : null;
   const selectedVisitorCanCancel =
     Boolean(selectedVisitor) &&
-    canCancelVisitors &&
+    canCreateVisitors &&
     ["PENDING", "PENDING_APPROVAL", "ACTIVE"].includes(
       selectedVisitor?.status ?? "",
     );
@@ -302,11 +288,9 @@ const VisitorsPage = () => {
                   variant="accent"
                   size="sm"
                   className="h-10 rounded-full px-3.5 shadow-accent/20"
-                  disabled={
-                    settingsQuery.isLoading ||
-                    !settings?.allow_resident_creation ||
-                    !canCreateByRule
-                  }
+                  disabled={Boolean(createInviteDisabledReason)}
+                  title={createInviteDisabledReason ?? undefined}
+                  aria-label={createInviteDisabledReason ?? "Novo convite"}
                 >
                   <Plus className="h-4 w-4" />
                   Novo convite
@@ -347,7 +331,7 @@ const VisitorsPage = () => {
                               key={`${rule.id}-${rule.guest_person_type_id}`}
                               value={String(rule.guest_person_type_id)}
                             >
-                              {rule.guest_person_type?.name ?? "Visitante"}
+                              {getGuestTypeLabel(rule)}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -358,10 +342,7 @@ const VisitorsPage = () => {
                   {allowedGuestRules.length === 1 ? (
                     <div className="rounded-[18px] bg-muted px-3 py-2 text-sm text-muted-foreground">
                       Tipo aplicado:{" "}
-                      <strong>
-                        {allowedGuestRules[0].guest_person_type?.name ??
-                          "Visitante"}
-                      </strong>
+                      <strong>{getGuestTypeLabel(allowedGuestRules[0])}</strong>
                     </div>
                   ) : null}
 
@@ -578,8 +559,7 @@ const VisitorsPage = () => {
                       size="sm"
                       className="min-w-0 rounded-full"
                       disabled={
-                        rotateLinkMutation.isPending ||
-                        !canRotateVisitorLinks ||
+                        !selectedVisitor.public_link ||
                         selectedVisitor.status === "CANCELLED"
                       }
                       onClick={() => handleShare(selectedVisitor)}
@@ -592,32 +572,13 @@ const VisitorsPage = () => {
                       size="sm"
                       className="min-w-0 rounded-full"
                       disabled={
-                        rotateLinkMutation.isPending ||
-                        !canRotateVisitorLinks ||
+                        !selectedVisitor.public_link ||
                         selectedVisitor.status === "CANCELLED"
                       }
                       onClick={() => handleCopy(selectedVisitor)}
                     >
                       <Copy className="h-3.5 w-3.5" />
                       Copiar
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="min-w-0 rounded-full"
-                      disabled={
-                        rotateLinkMutation.isPending ||
-                        !canRotateVisitorLinks ||
-                        selectedVisitor.status === "CANCELLED"
-                      }
-                      onClick={() => rotateLinkMutation.mutate(selectedVisitor.id)}
-                    >
-                      {rotateLinkMutation.isPending ? (
-                        <RefreshCcw className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Link2 className="h-3.5 w-3.5" />
-                      )}
-                      Link
                     </Button>
                   </div>
                 </div>

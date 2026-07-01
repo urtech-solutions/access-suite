@@ -17,8 +17,8 @@
     "cap:sync": "npm run build:capacitor && npx cap sync",
     "cap:android": "npm run build:capacitor && npx cap sync android && npx cap open android",
     "cap:ios": "npm run build:capacitor && npx cap sync ios && npx cap open ios",
-    "cap:dev:android": "npx cap run android --livereload --external",
-    "cap:dev:ios": "npx cap run ios --livereload --external",
+    "cap:dev:android": "npx cap run android --live-reload",
+    "cap:dev:ios": "npx cap run ios --live-reload --external",
     "apk:debug": "npm run build:capacitor && npx cap sync android && cd android && ./gradlew assembleDebug",
     "apk:release": "npm run build:capacitor && npx cap sync android && cd android && ./gradlew bundleRelease",
     "deploy:emulator": "npm run apk:debug && adb.exe install -r android/app/build/outputs/apk/debug/app-debug.apk"
